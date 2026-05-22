@@ -4,7 +4,9 @@ import Editor, { Monaco } from '@monaco-editor/react';
 import { 
   Terminal as TermIcon, Play, Save, Monitor, Moon, Sun, 
   FolderTree, Package, Puzzle, Trash2, User, ChevronDown, 
-  Plus, Check, X, FileText, Globe, AlertTriangle, RefreshCw, Download 
+  Plus, Check, X, FileText, Globe, AlertTriangle, RefreshCw, Download,
+  Bell, Clock, Maximize2, ArrowLeft, ToggleLeft, ToggleRight, PanelRightClose, PanelRightOpen,
+  Wand2, Lightbulb, GitBranch, Braces
 } from 'lucide-react';
 
 import { useStore } from '../store';
@@ -19,6 +21,55 @@ interface IDEWorkspaceProps {
   onBackToDashboard: () => void;
 }
 
+type WorkspaceNotification = {
+  id: string;
+  type: 'extension' | 'package' | 'delete';
+  title: string;
+  message: string;
+  timestamp: string;
+  read: boolean;
+};
+
+type ExtensionDiagnostic = {
+  id: string;
+  source: string;
+  severity: 'error' | 'warning' | 'info';
+  file: string;
+  message: string;
+};
+
+const formatWithPrettierLite = (path: string, code: string) => {
+  const trimmedLines = code
+    .split('\n')
+    .map((line) => line.replace(/\s+$/g, ''))
+    .join('\n')
+    .trimEnd();
+
+  if (path.endsWith('.json')) {
+    try {
+      return `${JSON.stringify(JSON.parse(trimmedLines), null, 2)}\n`;
+    } catch {
+      return `${trimmedLines}\n`;
+    }
+  }
+
+  return `${trimmedLines}\n`;
+};
+
+const createReactSnippet = (kind: 'component' | 'hook', path: string) => {
+  const baseName = path.split('/').pop()?.replace(/\.[^.]+$/, '') || 'Component';
+  const componentName = baseName
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .replace(/(?:^|\s)(\w)/g, (_, letter: string) => letter.toUpperCase())
+    .replace(/\s+/g, '') || 'Component';
+
+  if (kind === 'hook') {
+    return `\nconst [value, setValue] = React.useState('');\n`;
+  }
+
+  return `\nfunction ${componentName}() {\n  return (\n    <section>\n      <h2>${componentName}</h2>\n    </section>\n  );\n}\n\nexport default ${componentName};\n`;
+};
+
 export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
   // Pull stores
   const store = useStore();
@@ -27,23 +78,148 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
   const sidebarPanel = store.sidebarPanel;
   const terminalOpen = store.terminalOpen;
   const unsavedDrafts = store.unsavedDrafts;
-
-  const fileCount = activeProj ? Object.values(activeProj.files).filter((f) => !f.isFolder).length : 0;
-  const extCount = activeProj ? (activeProj.installedExtensions?.length || 0) : 0;
-  const pkgCount = activeProj ? (activeProj.installedPackages?.length || 0) : 0;
-  const recycleCount = activeProj ? (activeProj.recycleBin?.length || 0) : 0;
-  const projectCount = Object.keys(store.projects).length;
+  const previewOpen = store.previewOpen !== false;
+  const autoSave = store.autoSave;
 
   const [previewSrcDoc, setPreviewSrcDoc] = useState<string>('');
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [runLoading, setRunLoading] = useState(false);
   const [cmdInput, setCmdInput] = useState('');
+  const [cmdHistoryIndex, setCmdHistoryIndex] = useState<number | null>(null);
+  const [terminalPanel, setTerminalPanel] = useState<'terminal' | 'output' | 'problems'>('terminal');
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<WorkspaceNotification[]>([]);
 
   // Refs for dragging resizers
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const activeRevokes = useRef<string[]>([]);
+  const unreadNotifications = notifications.filter((n) => !n.read).length;
+  const activeTerminalSessionId = store.activeTerminalSessionId;
+  const activeTerminalLogs = store.terminalLogs.filter((log) => !log.sessionId || log.sessionId === activeTerminalSessionId);
+  const activeFilePath = activeProj?.activeFile ?? null;
+  const activeFileNode = activeProj && activeFilePath ? activeProj.files[activeFilePath] : null;
+  const edCode = activeFilePath && activeFileNode
+    ? (unsavedDrafts[activeFilePath] !== undefined ? unsavedDrafts[activeFilePath] : activeFileNode.content)
+    : '';
+  const installedExtensions = activeProj?.installedExtensions ?? [];
+  const extensionIsActive = (...needles: string[]) => installedExtensions.some((extension) => {
+    const normalized = extension.toLowerCase();
+    return needles.some((needle) => normalized.includes(needle.toLowerCase()));
+  });
+  const extensionFeatures = {
+    prettier: extensionIsActive('prettier'),
+    eslint: extensionIsActive('eslint'),
+    errorLens: extensionIsActive('error lens', 'errorlens'),
+    tailwind: extensionIsActive('tailwind'),
+    reactSnippets: extensionIsActive('react snippets', 'es7', 'snippet'),
+    npmIntellisense: extensionIsActive('npm intellisense', 'npm'),
+    pathIntellisense: extensionIsActive('path intellisense', 'path autocomplete'),
+    gitLens: extensionIsActive('gitlens'),
+    materialIcons: extensionIsActive('material icon', 'material-icon-theme')
+  };
+  const activePackageNames = activeProj?.installedPackages.map((pkg) => pkg.split('@')[0]).filter(Boolean) ?? [];
+  const lastWorkspaceAction = activeProj && activeProj.historyLogs.length > 0
+    ? activeProj.historyLogs[activeProj.historyLogs.length - 1]
+    : undefined;
+
+  const formatActiveFile = () => {
+    if (!activeProj || !activeFilePath || !activeFileNode || activeFileNode.isFolder) return false;
+
+    const formatted = formatWithPrettierLite(activeFilePath, edCode);
+    if (formatted === edCode) return false;
+
+    store.updateFileContent(activeProj.id, activeFilePath, formatted);
+    return true;
+  };
+
+  const saveWorkspace = (message = 'Manual save successful') => {
+    if (!activeProj) return;
+    const formatted = extensionFeatures.prettier ? formatActiveFile() : false;
+
+    window.setTimeout(() => {
+      store.saveChanges(activeProj.id);
+      store.addTerminalLog({
+        type: 'success',
+        content: formatted ? `${message}. Prettier formatted ${activeFilePath}.` : message
+      });
+      handleExecuteSandbox();
+    }, 0);
+  };
+
+  const insertReactSnippet = (kind: 'component' | 'hook') => {
+    if (!activeProj || !activeFilePath || !activeFileNode || activeFileNode.isFolder) return;
+    const snippet = createReactSnippet(kind, activeFilePath);
+    store.updateFileContent(activeProj.id, activeFilePath, `${edCode.trimEnd()}\n${snippet}`);
+    store.addTerminalLog({ type: 'success', content: `React Snippets inserted a ${kind} snippet into ${activeFilePath}.` });
+  };
+
+  const extensionDiagnostics: ExtensionDiagnostic[] = [];
+  if (activeFilePath && edCode) {
+    if (extensionFeatures.eslint && /\bvar\s+/.test(edCode)) {
+      extensionDiagnostics.push({
+        id: 'eslint-var',
+        source: 'ESLint',
+        severity: 'warning',
+        file: activeFilePath,
+        message: 'Prefer let or const instead of var.'
+      });
+    }
+
+    if (extensionFeatures.eslint && /console\.log\(/.test(edCode)) {
+      extensionDiagnostics.push({
+        id: 'eslint-console',
+        source: 'ESLint',
+        severity: 'info',
+        file: activeFilePath,
+        message: 'Console statement detected in source code.'
+      });
+    }
+
+    if (extensionFeatures.errorLens) {
+      const openCurlies = (edCode.match(/\{/g) || []).length;
+      const closeCurlies = (edCode.match(/\}/g) || []).length;
+      const openParens = (edCode.match(/\(/g) || []).length;
+      const closeParens = (edCode.match(/\)/g) || []).length;
+      if (openCurlies !== closeCurlies || openParens !== closeParens) {
+        extensionDiagnostics.push({
+          id: 'errorlens-balance',
+          source: 'Error Lens',
+          severity: 'error',
+          file: activeFilePath,
+          message: 'Possible unmatched bracket or parenthesis in the active file.'
+        });
+      }
+    }
+
+    if (extensionFeatures.tailwind && /className\s*=/.test(edCode) && !/className\s*=\s*["'`][^"'`]*(flex|grid|p-|m-|text-|bg-)/.test(edCode)) {
+      extensionDiagnostics.push({
+        id: 'tailwind-hint',
+        source: 'Tailwind IntelliSense',
+        severity: 'info',
+        file: activeFilePath,
+        message: 'Tailwind className detected. Suggestions are active in the editor toolbar.'
+      });
+    }
+  }
+
+  const pushNotification = (type: WorkspaceNotification['type'], title: string, message: string) => {
+    const item: WorkspaceNotification = {
+      id: `notify_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      type,
+      title,
+      message,
+      timestamp: new Date().toLocaleTimeString(),
+      read: false
+    };
+    setNotifications((prev) => [item, ...prev].slice(0, 20));
+  };
+
+  const openNotifications = () => {
+    setNotificationsOpen((open) => !open);
+    setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+  };
 
   // Trigger Sandbox compilation on Mount and when requested
   const handleExecuteSandbox = () => {
@@ -90,6 +266,16 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
     }
   }, [store.activeProjectId]);
 
+  useEffect(() => {
+    if (!autoSave || !activeProj || Object.keys(unsavedDrafts).length === 0) return;
+
+    const timer = window.setTimeout(() => {
+      saveWorkspace('Auto Save committed workspace changes.');
+    }, 900);
+
+    return () => window.clearTimeout(timer);
+  }, [autoSave, activeProj?.id, unsavedDrafts]);
+
   // Listener for dynamic sandboxed Iframe messages (logs/errors)
   useEffect(() => {
     const handleReceiveSandboxMessage = (event: MessageEvent) => {
@@ -126,9 +312,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
       if (isCtrl && e.key.toLowerCase() === 's') {
         e.preventDefault();
         if (store.activeProjectId) {
-          store.saveChanges(store.activeProjectId);
-          store.addTerminalLog({ type: 'success', content: 'Saved project modules successfully. (v1.0.0)' });
-          handleExecuteSandbox();
+          saveWorkspace('Saved project modules successfully. (v1.0.0)');
         }
       }
       
@@ -175,15 +359,6 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
     );
   }
 
-  const activeFilePath = activeProj.activeFile;
-  const activeFileNode = activeFilePath ? activeProj.files[activeFilePath] : null;
-
-  // Monaco editor value
-  // We fetch from intermediate drafts if modified, or fallback to saved file content
-  const edCode = activeFilePath && activeFileNode
-    ? (unsavedDrafts[activeFilePath] !== undefined ? unsavedDrafts[activeFilePath] : activeFileNode.content)
-    : '';
-
   const getLanguageType = (path: string) => {
     if (path.endsWith('.tsx') || path.endsWith('.ts')) return 'typescript';
     if (path.endsWith('.jsx') || path.endsWith('.js')) return 'javascript';
@@ -191,6 +366,71 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
     if (path.endsWith('.html')) return 'html';
     if (path.endsWith('.json')) return 'json';
     return 'plaintext';
+  };
+
+  const configureMonaco = (monaco: Monaco) => {
+    const compilerOptions = {
+      target: monaco.languages.typescript.ScriptTarget.ES2020,
+      module: monaco.languages.typescript.ModuleKind.ESNext,
+      moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+      jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+      allowJs: true,
+      allowNonTsExtensions: true,
+      esModuleInterop: true,
+      allowSyntheticDefaultImports: true,
+      noEmit: true,
+      skipLibCheck: true
+    };
+
+    const diagnosticsOptions = {
+      noSemanticValidation: true,
+      noSuggestionDiagnostics: true,
+      noSyntaxValidation: false
+    };
+
+    monaco.languages.typescript.typescriptDefaults.setCompilerOptions(compilerOptions);
+    monaco.languages.typescript.javascriptDefaults.setCompilerOptions(compilerOptions);
+    monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(diagnosticsOptions);
+    monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions(diagnosticsOptions);
+
+    const devdocksRuntimeTypes = `
+      declare module 'fs';
+      declare module 'node:fs';
+      declare module 'path';
+      declare module 'node:path';
+      declare module 'process';
+      declare module 'node:process';
+      declare module 'buffer';
+      declare module 'node:buffer';
+      declare module 'events';
+      declare module 'node:events';
+      declare module 'util';
+      declare module 'node:util';
+      declare module 'crypto';
+      declare module 'node:crypto';
+      declare module 'os';
+      declare module 'node:os';
+      declare module 'http';
+      declare module 'node:http';
+      declare module 'https';
+      declare module 'node:https';
+      declare module 'stream';
+      declare module 'node:stream';
+      declare module 'url';
+      declare module 'node:url';
+      declare module 'express';
+      declare module 'motion/react';
+      declare module 'lucide-react';
+      declare module 'zustand';
+      declare module 'axios';
+      declare module 'react-router-dom';
+      declare const process: any;
+      declare const Buffer: any;
+      declare const require: any;
+    `;
+
+    monaco.languages.typescript.typescriptDefaults.addExtraLib(devdocksRuntimeTypes, 'file:///devdocks-runtime.d.ts');
+    monaco.languages.typescript.javascriptDefaults.addExtraLib(devdocksRuntimeTypes, 'file:///devdocks-runtime-js.d.ts');
   };
 
   // Drag resizers handlers
@@ -260,8 +500,73 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
     if (cmdInput.trim()) {
       store.executeTerminalCommand(cmdInput.trim());
       setCmdInput('');
+      setCmdHistoryIndex(null);
     }
   };
+
+  const handleTerminalKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.ctrlKey && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      store.clearTerminal();
+      return;
+    }
+
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const history = store.terminalCommandHistory;
+    if (history.length === 0) return;
+
+    e.preventDefault();
+    if (e.key === 'ArrowUp') {
+      const nextIndex = cmdHistoryIndex === null ? history.length - 1 : Math.max(0, cmdHistoryIndex - 1);
+      setCmdHistoryIndex(nextIndex);
+      setCmdInput(history[nextIndex]);
+      return;
+    }
+
+    if (cmdHistoryIndex === null) return;
+    const nextIndex = cmdHistoryIndex + 1;
+    if (nextIndex >= history.length) {
+      setCmdHistoryIndex(null);
+      setCmdInput('');
+    } else {
+      setCmdHistoryIndex(nextIndex);
+      setCmdInput(history[nextIndex]);
+    }
+  };
+
+  const installExtensionWithNotice = (id: string) => {
+    store.installExtension(activeProj.id, id);
+    pushNotification('extension', 'Extension installed', `${id} is active in this workspace.`);
+  };
+
+  const uninstallExtensionWithNotice = (id: string) => {
+    store.uninstallExtension(activeProj.id, id);
+    pushNotification('extension', 'Extension removed', `${id} was removed from this workspace.`);
+  };
+
+  const installPackageWithNotice = (name: string, version?: string) => {
+    store.installPackage(activeProj.id, name, version);
+    pushNotification('package', 'Package installed', `${name}${version ? `@${version}` : ''} was added to package.json dependencies.`);
+  };
+
+  const uninstallPackageWithNotice = (name: string) => {
+    store.uninstallPackage(activeProj.id, name);
+    pushNotification('package', 'Package removed', `${name} was removed from package.json dependencies.`);
+  };
+
+  const deletePathWithNotice = (path: string) => {
+    store.deleteFileOrFolder(activeProj.id, path);
+    pushNotification('delete', 'Moved to Recycle Bin', `${path} was deleted from the explorer.`);
+  };
+
+  const problemLogs = activeTerminalLogs.filter((log) => log.type === 'error');
+  const problemCount = problemLogs.length + extensionDiagnostics.length;
+  const outputLogs = activeTerminalLogs.filter((log) => log.type !== 'input');
+  const displayedTerminalLogs = terminalPanel === 'problems'
+    ? problemLogs
+    : terminalPanel === 'output'
+      ? outputLogs
+      : activeTerminalLogs;
 
   return (
     <div ref={containerRef} className={`h-screen flex flex-col overflow-hidden select-none font-sans ${
@@ -271,8 +576,18 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
       {/* -------------------------------- NAVBAR -------------------------------- */}
       <nav id="navbar" className={`h-12 border-b px-3 flex items-center justify-between shrink-0 z-20 ${
         theme === 'dark' ? 'border-[#30363d] bg-[#161b22]' : 'border-slate-200 bg-white shadow-sm'
-      }`}>
+        }`}>
         <div className="flex items-center gap-3">
+          <button
+            onClick={onBackToDashboard}
+            className={`h-8 w-8 rounded-lg flex items-center justify-center transition border ${
+              theme === 'dark' ? 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Back to Dashboard"
+          >
+            <ArrowLeft size={14} />
+          </button>
+
           {/* Logo click returns to dashboard */}
           <div 
             onClick={onBackToDashboard}
@@ -285,6 +600,23 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               DevDocks
             </span>
           </div>
+
+          <div className="h-4 w-[1px] bg-white/10" />
+
+          <button
+            onClick={() => store.setAutoSave(!autoSave)}
+            className={`h-7 px-2.5 rounded text-xs font-semibold flex items-center gap-1.5 transition border ${
+              autoSave
+                ? 'bg-[#1f6feb]/15 border-[#1f6feb]/40 text-[#58a6ff]'
+                : theme === 'dark'
+                  ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Toggle Auto Save"
+          >
+            {autoSave ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
+            <span>Auto Save</span>
+          </button>
 
           <div className="h-4 w-[1px] bg-white/10" />
 
@@ -314,7 +646,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                     <span>New File / Folder</span>
                   </button>
                   <button 
-                    onClick={() => { store.saveChanges(activeProj.id); handleExecuteSandbox(); setDropdownOpen(false); }}
+                    onClick={() => { saveWorkspace('Manual save successful'); setDropdownOpen(false); }}
                     className={`w-full text-left px-3 py-2 flex items-center gap-2 ${theme === 'dark' ? 'hover:bg-slate-900' : 'hover:bg-slate-100'}`}
                   >
                     <Save size={12} />
@@ -380,11 +712,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
           )}
 
           <button
-            onClick={() => {
-              store.saveChanges(activeProj.id);
-              store.addTerminalLog({ type: 'success', content: 'Manual save successful' });
-              handleExecuteSandbox();
-            }}
+            onClick={() => saveWorkspace('Manual save successful')}
             className={`px-3 h-8 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
               theme === 'dark' ? 'bg-slate-900 border border-slate-800 text-slate-300 hover:text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
             }`}
@@ -435,11 +763,6 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               }`}
             >
               <FolderTree size={16} />
-              {fileCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#1f6feb] text-[8px] font-bold text-white shadow-sm ring-1 ring-[#07090d]">
-                  {fileCount}
-                </span>
-              )}
               <div className="absolute left-14 bg-[#161b22] text-[#c9d1d9] text-[10px] py-1 px-2 pointer-events-none opacity-0 group-hover:opacity-100 rounded z-30 transition border border-[#30363d] whitespace-nowrap font-mono">File Explorer (Ctrl+B)</div>
             </button>
 
@@ -450,11 +773,6 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               }`}
             >
               <Puzzle size={16} />
-              {extCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#238636] text-[8px] font-bold text-white shadow-sm ring-1 ring-[#07090d]">
-                  {extCount}
-                </span>
-              )}
               <div className="absolute left-14 bg-[#161b22] text-[#c9d1d9] text-[10px] py-1 px-2 pointer-events-none opacity-0 group-hover:opacity-100 rounded z-30 transition border border-[#30363d] whitespace-nowrap font-mono">Extension Downloader</div>
             </button>
 
@@ -465,11 +783,6 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               }`}
             >
               <Package size={16} />
-              {pkgCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#bf8700] text-[8px] font-bold text-white shadow-sm ring-1 ring-[#07090d]">
-                  {pkgCount}
-                </span>
-              )}
               <div className="absolute left-14 bg-[#161b22] text-[#c9d1d9] text-[10px] py-1 px-2 pointer-events-none opacity-0 group-hover:opacity-100 rounded z-30 transition border border-[#30363d] whitespace-nowrap font-mono">Package Downloader</div>
             </button>
 
@@ -490,31 +803,65 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               }`}
             >
               <Trash2 size={16} />
-              {recycleCount > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#da3637] text-[8px] font-bold text-white shadow-sm ring-1 ring-[#07090d]">
-                  {recycleCount}
-                </span>
-              )}
               <div className="absolute left-14 bg-[#161b22] text-[#c9d1d9] text-[10px] py-1 px-2 pointer-events-none opacity-0 group-hover:opacity-100 rounded z-30 transition border border-[#30363d] whitespace-nowrap font-mono">Recycle Bin & History</div>
             </button>
           </div>
 
           {/* Bottom user profile icons */}
-          <button
-            onClick={() => store.setSidebarPanel(sidebarPanel === 'profile' ? null : 'profile')}
-            className={`p-2 rounded relative cursor-pointer group transition ${
-              sidebarPanel === 'profile' ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
-            }`}
-          >
-            <User size={16} />
-            {projectCount > 0 && (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#6366f1] text-[8px] font-bold text-white shadow-sm ring-1 ring-[#07090d]">
-                {projectCount}
-              </span>
-            )}
-            <div className="absolute left-14 bg-[#161b22] text-[#c9d1d9] text-[10px] py-1 px-2 pointer-events-none opacity-0 group-hover:opacity-100 rounded z-30 transition border border-[#30363d] whitespace-nowrap font-mono">Developer Profile</div>
-          </button>
+          <div className="flex flex-col gap-4 items-center relative">
+            <button
+              onClick={openNotifications}
+              className={`p-2 rounded relative cursor-pointer group transition ${
+                notificationsOpen ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+              }`}
+            >
+              <Bell size={16} />
+              {unreadNotifications > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#da3637] text-[8px] font-bold text-white shadow-sm ring-1 ring-[#07090d]">
+                  {unreadNotifications}
+                </span>
+              )}
+              <div className="absolute left-14 bg-[#161b22] text-[#c9d1d9] text-[10px] py-1 px-2 pointer-events-none opacity-0 group-hover:opacity-100 rounded z-30 transition border border-[#30363d] whitespace-nowrap font-mono">Notifications</div>
+            </button>
+            <button
+              onClick={() => store.setSidebarPanel(sidebarPanel === 'profile' ? null : 'profile')}
+              className={`p-2 rounded relative cursor-pointer group transition ${
+                sidebarPanel === 'profile' ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+              }`}
+            >
+              <User size={16} />
+              <div className="absolute left-14 bg-[#161b22] text-[#c9d1d9] text-[10px] py-1 px-2 pointer-events-none opacity-0 group-hover:opacity-100 rounded z-30 transition border border-[#30363d] whitespace-nowrap font-mono">Developer Profile</div>
+            </button>
+          </div>
         </div>
+
+        {notificationsOpen && (
+          <div className="absolute left-14 bottom-14 z-50 w-80 max-w-[calc(100vw-72px)] rounded border border-[#30363d] bg-[#161b22] shadow-2xl overflow-hidden">
+            <div className="h-9 px-3 flex items-center justify-between border-b border-[#30363d]">
+              <span className="text-[10px] uppercase font-mono font-bold tracking-wider text-[#8b949e]">Notifications</span>
+              <button onClick={() => setNotificationsOpen(false)} className="p-1 rounded text-[#8b949e] hover:text-white hover:bg-[#0d1117]">
+                <X size={11} />
+              </button>
+            </div>
+            <div className="max-h-72 overflow-y-auto p-2 space-y-1.5">
+              {notifications.length === 0 ? (
+                <div className="py-8 text-center text-xs text-[#8b949e]">No workspace notifications yet.</div>
+              ) : (
+                notifications.map((item) => (
+                  <div key={item.id} className="p-2.5 rounded bg-[#0d1117] border border-[#30363d]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-[#c9d1d9] truncate">{item.title}</span>
+                      <span className="text-[8px] font-mono text-[#8b949e] inline-flex items-center gap-1 shrink-0">
+                        <Clock size={8} /> {item.timestamp}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#8b949e] mt-1 leading-normal break-words">{item.message}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ----------------- ACTIVE SLIDE PANEL DRAWER ----------------- */}
         <AnimatePresence>
@@ -533,24 +880,25 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                     onCreateFile={(path) => store.createFile(activeProj.id, path, '// code module')}
                     onCreateFolder={(path) => store.createFolder(activeProj.id, path)}
                     onRename={(old, n) => store.renameFileOrFolder(activeProj.id, old, n)}
-                    onDelete={(path) => store.deleteFileOrFolder(activeProj.id, path)}
+                    onDelete={deletePathWithNotice}
                     onOpenFile={(path) => store.openTab(activeProj.id, path)}
                     activeFile={activeFilePath}
                     unsavedDrafts={unsavedDrafts}
+                    materialIcons={extensionFeatures.materialIcons}
                   />
                 )}
                 {sidebarPanel === 'extensions' && (
                   <ExtensionDownloaderPanel
                     project={activeProj}
-                    onInstall={(id) => store.installExtension(activeProj.id, id)}
-                    onUninstall={(id) => store.uninstallExtension(activeProj.id, id)}
+                    onInstall={installExtensionWithNotice}
+                    onUninstall={uninstallExtensionWithNotice}
                   />
                 )}
                 {sidebarPanel === 'packages' && (
                   <PackageDownloaderPanel
                     project={activeProj}
-                    onInstall={(name) => store.installPackage(activeProj.id, name)}
-                    onUninstall={(name) => store.uninstallPackage(activeProj.id, name)}
+                    onInstall={installPackageWithNotice}
+                    onUninstall={uninstallPackageWithNotice}
                   />
                 )}
                 {sidebarPanel === 'recycle' && (
@@ -588,7 +936,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             
             {/* -------------------- CENTER MONACO EDITOR -------------------- */}
             <div 
-              style={{ width: `${store.editorWidth}%` }}
+              style={{ width: previewOpen ? `${store.editorWidth}%` : '100%' }}
               className={`h-full flex flex-col overflow-hidden shrink-0 relative ${
                 theme === 'dark' ? 'bg-[#0d1117]' : 'bg-slate-50'
               }`}
@@ -644,11 +992,64 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
 
               {/* Active editing filename row */}
               {activeFilePath && (
-                <div className={`h-6 px-3 flex items-center justify-between font-mono text-[9px] border-b uppercase shrink-0 ${
+                <div className={`min-h-7 px-3 py-1 flex items-center justify-between gap-2 font-mono text-[9px] border-b uppercase shrink-0 ${
                   theme === 'dark' ? 'bg-[#161b22]/70 border-[#30363d] text-[#8b949e]' : 'bg-slate-50 border-slate-200 text-slate-500'
                 }`}>
-                  <span>📍 Path: {activeFilePath}</span>
-                  <span>{getLanguageType(activeFilePath)} - Editor mode</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="truncate">Path: {activeFilePath}</span>
+                    {extensionFeatures.prettier && (
+                      <button
+                        onClick={formatActiveFile}
+                        className="h-5 px-1.5 rounded border border-[#30363d] bg-[#0d1117] text-[#58a6ff] hover:text-white flex items-center gap-1 normal-case"
+                        title="Prettier: format active file"
+                      >
+                        <Wand2 size={10} />
+                        <span>Format</span>
+                      </button>
+                    )}
+                    {extensionFeatures.reactSnippets && (activeFilePath.endsWith('.tsx') || activeFilePath.endsWith('.jsx')) && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => insertReactSnippet('component')}
+                          className="h-5 px-1.5 rounded border border-[#30363d] bg-[#0d1117] text-[#c9d1d9] hover:text-white flex items-center gap-1 normal-case"
+                          title="React Snippets: insert component"
+                        >
+                          <Braces size={10} />
+                          <span>Component</span>
+                        </button>
+                        <button
+                          onClick={() => insertReactSnippet('hook')}
+                          className="h-5 px-1.5 rounded border border-[#30363d] bg-[#0d1117] text-[#c9d1d9] hover:text-white flex items-center gap-1 normal-case"
+                          title="React Snippets: insert hook"
+                        >
+                          <Lightbulb size={10} />
+                          <span>Hook</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {extensionFeatures.tailwind && /className\s*=/.test(edCode) && (
+                      <span className="text-[#38bdf8] normal-case" title="Tailwind IntelliSense suggestions">flex grid p-4 text-sm bg-slate-900</span>
+                    )}
+                    {extensionFeatures.npmIntellisense && activePackageNames.length > 0 && (
+                      <span className="text-emerald-400 normal-case truncate max-w-[180px]" title="npm Intellisense active packages">
+                        imports: {activePackageNames.slice(0, 3).join(', ')}
+                      </span>
+                    )}
+                    {extensionFeatures.pathIntellisense && (
+                      <span className="text-[#a5d6ff] normal-case truncate max-w-[150px]" title="Path Intellisense">
+                        paths: {Object.keys(activeProj.files).filter((path) => !activeProj.files[path].isFolder).slice(0, 2).join(', ')}
+                      </span>
+                    )}
+                    {extensionFeatures.gitLens && lastWorkspaceAction && (
+                      <span className="text-[#d2a8ff] normal-case flex items-center gap-1" title={lastWorkspaceAction.message}>
+                        <GitBranch size={10} />
+                        {lastWorkspaceAction.action}
+                      </span>
+                    )}
+                    <span>{getLanguageType(activeFilePath)} - Editor mode</span>
+                  </div>
                 </div>
               )}
 
@@ -660,6 +1061,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                     language={getLanguageType(activeFilePath)}
                     theme={theme === 'dark' ? 'vs-dark' : 'light'}
                     value={edCode}
+                    beforeMount={configureMonaco}
                     onChange={(val) => {
                       if (val !== undefined) {
                         store.updateFileContent(activeProj.id, activeFilePath, val);
@@ -687,13 +1089,16 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               </div>
 
               {/* Split resizer draggable line */}
-              <div
-                onMouseDown={handleEditorSplitResMouseDown}
-                className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[#58a6ff]/35 transition z-30"
-              />
+              {previewOpen && (
+                <div
+                  onMouseDown={handleEditorSplitResMouseDown}
+                  className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[#58a6ff]/35 transition z-30"
+                />
+              )}
             </div>
 
             {/* -------------------- RIGHT SANDBOX PREVIEW -------------------- */}
+            {previewOpen ? (
             <div className="flex-1 h-full flex flex-col overflow-hidden relative bg-[#0d1117]">
               
               {/* Preview controls panel */}
@@ -715,6 +1120,13 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                     title="Manual Hot Reload Compile"
                   >
                     <RefreshCw size={11} />
+                  </button>
+                  <button
+                    onClick={() => store.setPreviewOpen(false)}
+                    className="p-1 hover:bg-[#1f242c] rounded text-[#8b949e] hover:text-white transition duration-150 cursor-pointer"
+                    title="Temporarily Hide Sandbox Preview"
+                  >
+                    <PanelRightClose size={12} />
                   </button>
                 </div>
               </div>
@@ -764,6 +1176,15 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               </div>
 
             </div>
+            ) : (
+              <button
+                onClick={() => store.setPreviewOpen(true)}
+                className="absolute top-2 right-2 z-40 h-7 w-7 rounded border border-[#30363d] bg-[#161b22] text-[#8b949e] hover:text-white hover:bg-[#1f242c] flex items-center justify-center"
+                title="Open Sandbox Preview"
+              >
+                <PanelRightOpen size={13} />
+              </button>
+            )}
 
           </div>
 
@@ -784,20 +1205,68 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                 />
 
                 {/* Header panel strip */}
-                <div className={`h-8 px-3.5 flex items-center justify-between border-b shrink-0 ${
+                <div className={`h-9 px-3.5 flex items-center justify-between border-b shrink-0 ${
                   theme === 'dark' ? 'border-[#30363d] bg-[#161b22]' : 'border-slate-200 bg-slate-100'
                 }`}>
-                  <div className="flex items-center gap-2 text-xs font-mono select-none">
-                    <TermIcon size={11} className="text-[#58a6ff] shrink-0" />
-                    <span className="font-bold tracking-wider uppercase text-[#8b949e] text-[9px]">Integrated Sandbox Shell Terminal</span>
+                  <div className="flex items-center gap-5 text-xs font-mono select-none h-full">
+                    {(['problems', 'output', 'terminal'] as const).map((panel) => (
+                      <button
+                        key={panel}
+                        onClick={() => setTerminalPanel(panel)}
+                        className={`h-full border-b-2 text-[10px] font-bold uppercase tracking-wider ${
+                          terminalPanel === panel
+                            ? 'border-[#58a6ff] text-[#c9d1d9]'
+                            : 'border-transparent text-[#8b949e] hover:text-[#c9d1d9]'
+                        }`}
+                      >
+                        {panel === 'problems' ? `Problems${problemCount ? ` ${problemCount}` : ''}` : panel}
+                      </button>
+                    ))}
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="hidden md:flex items-center gap-1 max-w-[260px] overflow-x-auto">
+                      {store.terminalSessions.map((session) => (
+                        <button
+                          key={session.id}
+                          onClick={() => {
+                            store.setActiveTerminalSession(session.id);
+                            setTerminalPanel('terminal');
+                          }}
+                          className={`h-5 px-2 rounded border text-[9px] font-mono transition shrink-0 ${
+                            session.id === activeTerminalSessionId
+                              ? 'bg-[#0d1117] border-[#58a6ff]/50 text-[#c9d1d9]'
+                              : 'bg-[#0d1117] border-[#30363d] text-[#8b949e] hover:text-white'
+                          }`}
+                          title={session.createdAt}
+                        >
+                          {session.name}
+                        </button>
+                      ))}
+                    </div>
                     <button
-                      onClick={() => store.clearTerminal()}
-                      className="px-2 h-5 rounded text-[#8b949e] hover:text-white bg-[#0d1117] border border-[#30363d] text-[9px] font-bold cursor-pointer transition select-none"
+                      onClick={() => {
+                        store.createTerminalSession();
+                        setTerminalPanel('terminal');
+                      }}
+                      className="p-1 rounded text-[#8b949e] hover:text-white bg-[#0d1117] border border-[#30363d] transition cursor-pointer select-none"
+                      title="New Terminal"
                     >
-                      Clear
+                      <Plus size={9} />
+                    </button>
+                    <button
+                      onClick={() => store.closeTerminalSession(activeTerminalSessionId)}
+                      className="p-1 rounded text-[#8b949e] hover:text-white bg-[#0d1117] border border-[#30363d] transition cursor-pointer select-none"
+                      title="Kill Terminal"
+                    >
+                      <Trash2 size={9} />
+                    </button>
+                    <button
+                      onClick={() => store.setTerminalHeight(store.terminalHeight > 420 ? 220 : 520)}
+                      className="p-1 rounded text-[#8b949e] hover:text-white bg-[#0d1117] border border-[#30363d] transition cursor-pointer select-none"
+                      title="Toggle panel size"
+                    >
+                      <Maximize2 size={9} />
                     </button>
                     <button
                       onClick={() => store.setTerminalOpen(false)}
@@ -809,19 +1278,43 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                 </div>
 
                 {/* Logs scrolling area */}
-                <div id="terminal-content" className="flex-1 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed space-y-1 bg-[#0d1117]">
-                  {store.terminalLogs.map((log) => {
+                <div id="terminal-content" className="flex-1 overflow-y-auto px-4 py-3 font-mono text-[11px] leading-relaxed space-y-1 bg-[#0d1117]">
+                  {(terminalPanel === 'problems' ? problemCount === 0 : displayedTerminalLogs.length === 0) && (
+                    <div className="h-full flex items-center justify-center text-[#6e7681] text-xs select-none">
+                      {terminalPanel === 'problems' ? 'No problems have been detected.' : 'No output yet.'}
+                    </div>
+                  )}
+
+                  {terminalPanel === 'problems' && extensionDiagnostics.map((diagnostic) => (
+                    <div key={diagnostic.id} className={`whitespace-pre-wrap select-text break-words ${
+                      diagnostic.severity === 'error' ? 'text-[#ff7b72] font-semibold' : diagnostic.severity === 'warning' ? 'text-[#d29922]' : 'text-[#58a6ff]'
+                    }`}>
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                        <span className="min-w-0">[{diagnostic.source}] {diagnostic.file}: {diagnostic.message}</span>
+                      </div>
+                    </div>
+                  ))}
+
+                  {displayedTerminalLogs.map((log) => {
                     const typeColor = () => {
-                      if (log.type === 'input') return 'text-[#8b949e]';
+                      if (log.type === 'input') return 'text-[#c9d1d9]';
                       if (log.type === 'error') return 'text-[#ff7b72] font-semibold';
                       if (log.type === 'success') return 'text-emerald-400';
-                      if (log.type === 'system') return 'text-blue-450';
+                      if (log.type === 'system') return 'text-[#8b949e]';
                       return 'text-[#c9d1d9]';
                     };
 
                     return (
                       <div key={log.id} className={`whitespace-pre-wrap select-text break-words ${typeColor()}`}>
-                        {log.content}
+                        {terminalPanel === 'problems' ? (
+                          <div className="flex items-start gap-2">
+                            <AlertTriangle size={12} className="text-[#ff7b72] shrink-0 mt-0.5" />
+                            <span className="min-w-0">{log.content}</span>
+                          </div>
+                        ) : (
+                          log.content
+                        )}
                       </div>
                     );
                   })}
@@ -831,16 +1324,19 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                 </div>
 
                 {/* Custom shell inputs forms */}
+                {terminalPanel === 'terminal' && (
                 <form onSubmit={executeManualTerminal} className="h-8 border-t border-[#30363d] bg-[#0d1117] flex items-center pr-3">
-                  <span className="pl-4 pr-1 text-[#58a6ff] text-xs shrink-0 select-none">~ / {activeProj.name} $ </span>
+                  <span className="pl-4 pr-1 text-[#58a6ff] text-xs shrink-0 select-none">PS /workspace/{activeProj.name}/{store.terminalCwd === 'root' ? '' : store.terminalCwd} &gt; </span>
                   <input
                     type="text"
                     value={cmdInput}
                     onChange={(e) => setCmdInput(e.target.value)}
-                    placeholder='Type "help" or run standard commands (e.g. ls, mkdir, npm install...)'
+                    onKeyDown={handleTerminalKeyDown}
+                    placeholder='Type "help", npm install, ls, cd, tree, cat...'
                     className="flex-1 bg-transparent border-none outline-none text-[#c9d1d9] font-mono text-[11px] h-full w-full pl-1 focus:ring-0 placeholder-[#8b949e]/50"
                   />
                 </form>
+                )}
 
               </div>
             )}

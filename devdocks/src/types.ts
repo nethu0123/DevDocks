@@ -26,6 +26,14 @@ export interface TerminalLog {
   type: 'input' | 'output' | 'error' | 'success' | 'system';
   content: string;
   timestamp: string;
+  sessionId?: string;
+}
+
+export interface TerminalSession {
+  id: string;
+  name: string;
+  cwd: string;
+  createdAt: string;
 }
 
 export interface Project {
@@ -54,7 +62,10 @@ export interface AppState {
   sidebarPanel: SidebarPanel;
   terminalOpen: boolean;
   previewOpen?: boolean;
+  autoSave: boolean;
   terminalLogs: TerminalLog[];
+  terminalSessions: TerminalSession[];
+  activeTerminalSessionId: string;
   terminalCommandHistory: string[];
   terminalCwd: string; // current working directory virtual path like "root" or "src"
   

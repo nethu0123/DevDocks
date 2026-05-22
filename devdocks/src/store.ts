@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Project, FileNode, RecycleBinItem, HistoryLog, TerminalLog, SidebarPanel, AppState } from './types';
+import { Project, FileNode, RecycleBinItem, HistoryLog, TerminalLog, TerminalSession, SidebarPanel, AppState } from './types';
 
 interface AppStore extends AppState {
   // Navigation actions
@@ -8,6 +8,8 @@ interface AppStore extends AppState {
   setTheme: (theme: 'dark' | 'light') => void;
   setSidebarPanel: (panel: SidebarPanel) => void;
   setTerminalOpen: (open: boolean) => void;
+  setPreviewOpen: (open: boolean) => void;
+  setAutoSave: (enabled: boolean) => void;
   
   // Project Actions
   createProject: (name: string, description: string, techStack: string[]) => string;
@@ -32,7 +34,7 @@ interface AppStore extends AppState {
   setUnsavedDraft: (projectId: string, path: string, content: string | null) => void;
   
   // Packages and Extensions
-  installPackage: (projectId: string, packageName: string) => void;
+  installPackage: (projectId: string, packageName: string, version?: string) => void;
   uninstallPackage: (projectId: string, packageName: string) => void;
   installExtension: (projectId: string, extensionId: string) => void;
   uninstallExtension: (projectId: string, extensionId: string) => void;
@@ -41,6 +43,9 @@ interface AppStore extends AppState {
   addTerminalLog: (log: Omit<TerminalLog, 'id' | 'timestamp'>) => void;
   executeTerminalCommand: (commandStr: string) => void;
   clearTerminal: () => void;
+  createTerminalSession: () => string;
+  closeTerminalSession: (sessionId: string) => void;
+  setActiveTerminalSession: (sessionId: string) => void;
   
   // Dimensions
   setSidebarWidth: (width: number) => void;
@@ -255,11 +260,15 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './styles.css';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);`;
+const rootElement = document.getElementById('root');
+
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+}`;
 
   files[`src/main.${mainExt}`] = {
     path: `src/main.${mainExt}`,
@@ -272,6 +281,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
 // Load initial state from local storage securely
 const STORAGE_KEY = 'devdocks_workspace_state_v1';
+const DEFAULT_TERMINAL_SESSION: TerminalSession = {
+  id: 'terminal_1',
+  name: 'powershell',
+  cwd: 'root',
+  createdAt: new Date().toLocaleTimeString()
+};
+
 const loadPersistedState = (): Partial<AppState> => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -291,7 +307,15 @@ const loadPersistedState = (): Partial<AppState> => {
         theme: parsed.theme || 'dark',
         sidebarPanel: parsed.sidebarPanel || 'explorer',
         terminalOpen: parsed.terminalOpen !== undefined ? parsed.terminalOpen : false,
-        terminalLogs: parsed.terminalLogs || [],
+        previewOpen: parsed.previewOpen !== undefined ? parsed.previewOpen : true,
+        autoSave: parsed.autoSave !== undefined ? parsed.autoSave : false,
+        terminalLogs: (parsed.terminalLogs || []).filter((log: TerminalLog) => {
+          const content = log?.content || '';
+          return !content.includes("Cannot read properties of undefined (reading 'transform')")
+            && !content.includes('npm ERR: Unknown Action command. Supports: install, uninstall, run');
+        }),
+        terminalSessions: parsed.terminalSessions?.length ? parsed.terminalSessions : [DEFAULT_TERMINAL_SESSION],
+        activeTerminalSessionId: parsed.activeTerminalSessionId || parsed.terminalSessions?.[0]?.id || DEFAULT_TERMINAL_SESSION.id,
         terminalCommandHistory: parsed.terminalCommandHistory || [],
         terminalCwd: parsed.terminalCwd || 'root',
         sidebarWidth: fileExplorerWidth,
@@ -321,12 +345,17 @@ export const useStore = create<AppStore>((set, get) => ({
   theme: 'dark',
   sidebarPanel: 'explorer',
   terminalOpen: false,
+  previewOpen: true,
+  autoSave: false,
+  terminalSessions: [DEFAULT_TERMINAL_SESSION],
+  activeTerminalSessionId: DEFAULT_TERMINAL_SESSION.id,
   terminalLogs: [
     {
       id: 'welcome',
       type: 'system',
       content: 'DevDocks OS/Runtime v1.0.0. Type "help" or select terminal icons.',
-      timestamp: new Date().toLocaleTimeString()
+      timestamp: new Date().toLocaleTimeString(),
+      sessionId: DEFAULT_TERMINAL_SESSION.id
     }
   ],
   terminalCommandHistory: [],
@@ -403,6 +432,22 @@ export const useStore = create<AppStore>((set, get) => ({
     });
   },
 
+  setPreviewOpen: (open) => {
+    set({ previewOpen: open });
+    saveStateToLocalStorage({
+      ...get(),
+      previewOpen: open
+    });
+  },
+
+  setAutoSave: (enabled) => {
+    set({ autoSave: enabled });
+    saveStateToLocalStorage({
+      ...get(),
+      autoSave: enabled
+    });
+  },
+
   // Projects CRUD
   createProject: (name, description, techStack) => {
     const id = 'proj_' + Math.random().toString(36).substring(2, 11);
@@ -441,8 +486,8 @@ export const useStore = create<AppStore>((set, get) => ({
       description,
       techStack,
       files: starterFiles,
-      openTabs: ['src/App.tsx'],
-      activeFile: 'src/App.tsx',
+      openTabs: [techStack.includes('TypeScript') ? 'src/App.tsx' : 'src/App.jsx'],
+      activeFile: techStack.includes('TypeScript') ? 'src/App.tsx' : 'src/App.jsx',
       installedPackages: starterPackages,
       installedExtensions: starterExtensions,
       recycleBin: [],
@@ -1026,7 +1071,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   // Package Installer
-  installPackage: (projectId, packageName) => {
+  installPackage: (projectId, packageName, version = 'latest') => {
     set((state) => {
       const currentProj = state.projects[projectId];
       if (!currentProj) return {};
@@ -1041,7 +1086,7 @@ export const useStore = create<AppStore>((set, get) => ({
         try {
           const parsed = JSON.parse(pkgFile.content);
           parsed.dependencies = parsed.dependencies || {};
-          parsed.dependencies[packageName] = "latest";
+          parsed.dependencies[packageName] = version;
           pkgFile.content = JSON.stringify(parsed, null, 2);
         } catch (err) {
           console.error(err);
@@ -1059,7 +1104,7 @@ export const useStore = create<AppStore>((set, get) => ({
             id: 'pkg_' + Date.now(),
             timestamp: new Date().toLocaleTimeString(),
             action: 'pkg_install',
-            message: `Installed npm package "${packageName}"`
+            message: `Installed npm package "${packageName}@${version}"`
           }
         ]
       };
@@ -1127,9 +1172,17 @@ export const useStore = create<AppStore>((set, get) => ({
       if (currentProj.installedExtensions.includes(extensionId)) return {};
 
       const installedExtensions = [...currentProj.installedExtensions, extensionId];
+      const newFiles = { ...currentProj.files };
+      newFiles['.devdocks'] = newFiles['.devdocks'] || { path: '.devdocks', content: '', isFolder: true };
+      newFiles['.devdocks/extensions.json'] = {
+        path: '.devdocks/extensions.json',
+        isFolder: false,
+        content: JSON.stringify({ activeExtensions: installedExtensions }, null, 2)
+      };
       const updatedProj: Project = {
         ...currentProj,
         installedExtensions,
+        files: newFiles,
         lastEdited: new Date().toLocaleString(),
         historyLogs: [
           ...currentProj.historyLogs,
@@ -1157,9 +1210,17 @@ export const useStore = create<AppStore>((set, get) => ({
       if (!currentProj) return {};
 
       const installedExtensions = currentProj.installedExtensions.filter((e) => e !== extensionId);
+      const newFiles = { ...currentProj.files };
+      if (newFiles['.devdocks/extensions.json']) {
+        newFiles['.devdocks/extensions.json'] = {
+          ...newFiles['.devdocks/extensions.json'],
+          content: JSON.stringify({ activeExtensions: installedExtensions }, null, 2)
+        };
+      }
       const updatedProj: Project = {
         ...currentProj,
         installedExtensions,
+        files: newFiles,
         lastEdited: new Date().toLocaleString(),
         historyLogs: [
           ...currentProj.historyLogs,
@@ -1184,9 +1245,11 @@ export const useStore = create<AppStore>((set, get) => ({
   // Terminal actions
   addTerminalLog: (log) => {
     const id = 'log_' + Math.random().toString(36).substring(2, 9);
+    const sessionId = log.sessionId || get().activeTerminalSessionId || DEFAULT_TERMINAL_SESSION.id;
     const newLogItem: TerminalLog = {
       ...log,
       id,
+      sessionId,
       timestamp: new Date().toLocaleTimeString()
     };
     set((state) => {
@@ -1204,8 +1267,17 @@ export const useStore = create<AppStore>((set, get) => ({
     const currentCmd = commandStr.trim();
     if (!currentCmd) return;
 
+    if (currentCmd.includes('&&')) {
+      currentCmd.split('&&').map((part) => part.trim()).filter(Boolean).forEach((segment) => {
+        get().executeTerminalCommand(segment);
+      });
+      return;
+    }
+
     // Log the input
-    get().addTerminalLog({ type: 'input', content: `${get().terminalCwd} $ ${currentCmd}` });
+    const activeProjId = get().activeProjectId;
+    const activeProjectName = activeProjId ? get().projects[activeProjId]?.name || activeProjId : 'root';
+    get().addTerminalLog({ type: 'input', content: `PS /workspace/${activeProjectName}/${get().terminalCwd === 'root' ? '' : get().terminalCwd} > ${currentCmd}` });
 
     // Append to running command history list
     set((state) => {
@@ -1213,21 +1285,148 @@ export const useStore = create<AppStore>((set, get) => ({
       return { terminalCommandHistory: hist };
     });
 
-    const words = currentCmd.split(/\s+/);
-    const cmd = words[0].toLowerCase();
+    const parseArgs = (input: string) => {
+      const matches = input.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g);
+      return Array.from(matches, (match) => match[1] ?? match[2] ?? match[3]);
+    };
+
+    const words = parseArgs(currentCmd);
+    const rawCmd = words[0] || '';
+    const aliasMap: Record<string, string> = {
+      gci: 'ls',
+      'get-childitem': 'ls',
+      sl: 'cd',
+      'set-location': 'cd',
+      gc: 'cat',
+      'get-content': 'cat',
+      md: 'mkdir',
+      ni: 'new-item',
+      ri: 'rm',
+      'remove-item': 'rm',
+      cp: 'copy',
+      'copy-item': 'copy',
+      mv: 'move',
+      'move-item': 'move',
+      ren: 'rename',
+      'rename-item': 'rename',
+      sc: 'set-content',
+      ac: 'add-content'
+    };
+    const cmd = aliasMap[rawCmd.toLowerCase()] || rawCmd.toLowerCase();
     const args = words.slice(1);
 
-    const activeProjId = get().activeProjectId;
+    const resolveVirtualPath = (rawPath = '') => {
+      const cwd = get().terminalCwd === 'root' ? '' : get().terminalCwd;
+      const source = rawPath.startsWith('/') ? rawPath.slice(1) : [cwd, rawPath].filter(Boolean).join('/');
+      const parts: string[] = [];
+      source.split('/').filter(Boolean).forEach((part) => {
+        if (part === '.') return;
+        if (part === '..') parts.pop();
+        else parts.push(part);
+      });
+      return parts.join('/');
+    };
+
+    const ensureParentFolders = (projectId: string, path: string) => {
+      const parts = path.split('/').filter(Boolean);
+      parts.pop();
+      let running = '';
+      parts.forEach((part) => {
+        running = running ? `${running}/${part}` : part;
+        if (!get().projects[projectId]?.files[running]) {
+          get().createFolder(projectId, running);
+        }
+      });
+    };
+
+    const writeVirtualFile = (projectId: string, path: string, content: string, append = false) => {
+      ensureParentFolders(projectId, path);
+      const existing = get().projects[projectId]?.files[path];
+      if (!existing) {
+        get().createFile(projectId, path, content);
+        return true;
+      }
+      if (existing.isFolder) return false;
+
+      set((state) => {
+        const currentProj = state.projects[projectId];
+        if (!currentProj) return {};
+        const previous = currentProj.files[path]?.content || '';
+        const newFiles = {
+          ...currentProj.files,
+          [path]: {
+            ...currentProj.files[path],
+            content: append ? `${previous}${previous ? '\n' : ''}${content}` : content
+          }
+        };
+        const updatedProj: Project = {
+          ...currentProj,
+          files: newFiles,
+          lastEdited: new Date().toLocaleString(),
+          historyLogs: [
+            ...currentProj.historyLogs,
+            {
+              id: 'terminal_write_' + Date.now(),
+              timestamp: new Date().toLocaleTimeString(),
+              action: 'save',
+              message: `Terminal ${append ? 'appended to' : 'wrote'} "${path}"`
+            }
+          ]
+        };
+        const updated = {
+          ...state,
+          projects: { ...state.projects, [projectId]: updatedProj }
+        };
+        saveStateToLocalStorage(updated);
+        return updated;
+      });
+      return true;
+    };
+
+    const versions = {
+      node: 'v22.15.0',
+      npm: '10.9.2',
+      npx: '10.9.2',
+      yarn: '1.22.22',
+      pnpm: '9.15.4',
+      git: '2.45.0'
+    };
+
+    const printVersion = (name: keyof typeof versions) => {
+      get().addTerminalLog({ type: 'output', content: versions[name] });
+    };
 
     if (cmd === 'help') {
       get().addTerminalLog({
         type: 'output',
         content: `Available shell runtime commands:
 - npm install <pkg>       Install custom npm dependency
+- npm -v / --version      Show npm version
 - npm uninstall <pkg>     Uninstall custom npm dependency
 - npm run dev             Execute and boot dynamic compilation live preview sandbox
+- node -v                 Show Node.js version
+- git status              Show virtual repository status
+- yarn/pnpm <command>     Package-manager aliases for common npm commands
 - clear                   Clear active screen terminal logs
+- cls                     Clear active screen terminal logs
 - ls                      List files & directory structures inside current CWD
+- dir                     List files & directory structures inside current CWD
+- cd <dir>                Change virtual working directory
+- tree                    Print nested workspace tree
+- cat/type <file>         Print file contents
+- code <file>             Open a file in the editor
+- copy/cp <src> <dest>    Copy a file or folder
+- move/mv <src> <dest>    Move or rename a file or folder
+- rename/ren <old> <new>  Rename a file or folder
+- rm/del <path>           Move a file or folder to Recycle Bin
+- set-content <file> txt  Replace file contents
+- add-content <file> txt  Append file contents
+- echo txt > file         Write text to a file
+- echo txt >> file        Append text to a file
+- echo <text>             Print text
+- history                 Show command history
+- npm list                Show installed dependencies
+- npm view <pkg>          Show local registry metadata
 - pwd                     Show absolute path location inside virtual workspace
 - mkdir <dir_name>        Create a nested directory
 - touch <file_name>       Create a file at CWD path`
@@ -1235,7 +1434,76 @@ export const useStore = create<AppStore>((set, get) => ({
       return;
     }
 
-    if (cmd === 'clear') {
+    if (cmd === 'node') {
+      if (args[0] === '-v' || args[0] === '--version') {
+        printVersion('node');
+      } else if (args[0] === '-e') {
+        get().addTerminalLog({ type: 'output', content: '(node -e) evaluated inside DevDocks virtual runtime.' });
+      } else {
+        get().addTerminalLog({ type: 'output', content: 'Node.js virtual runtime. Try: node -v' });
+      }
+      return;
+    }
+
+    if (cmd === 'npx') {
+      if (args[0] === '-v' || args[0] === '--version') {
+        printVersion('npx');
+      } else if (args[0]) {
+        get().addTerminalLog({ type: 'system', content: `npx ${args.join(' ')} resolved in the virtual workspace.` });
+      } else {
+        get().addTerminalLog({ type: 'output', content: 'npx virtual runner. Try: npx vite --version' });
+      }
+      return;
+    }
+
+    if (cmd === 'git') {
+      const action = args[0];
+      if (action === '-v' || action === '--version' || action === 'version') {
+        printVersion('git');
+      } else if (action === 'status') {
+        const dirty = Object.keys(get().unsavedDrafts).length;
+        get().addTerminalLog({ type: 'output', content: `On branch main\n${dirty ? `Changes not staged for commit:\n  modified: ${Object.keys(get().unsavedDrafts).join('\n  modified: ')}` : 'nothing to commit, working tree clean'}` });
+      } else if (action === 'log') {
+        const proj = activeProjId ? get().projects[activeProjId] : null;
+        get().addTerminalLog({ type: 'output', content: proj?.historyLogs.slice(-8).reverse().map((log) => `commit ${log.id}\nDate: ${log.timestamp}\n\n    ${log.message}`).join('\n\n') || '(no commits)' });
+      } else if (action === 'branch') {
+        get().addTerminalLog({ type: 'output', content: '* main' });
+      } else if (['add', 'commit', 'push', 'pull', 'checkout', 'switch'].includes(action || '')) {
+        get().addTerminalLog({ type: 'success', content: `git ${args.join(' ')} completed in the virtual repository.` });
+      } else {
+        get().addTerminalLog({ type: 'output', content: 'git virtual SCM supports: status, log, branch, add, commit, push, pull, version' });
+      }
+      return;
+    }
+
+    if (cmd === 'yarn' || cmd === 'pnpm') {
+      const manager = cmd as 'yarn' | 'pnpm';
+      const action = args[0];
+      if (action === '-v' || action === '--version') {
+        printVersion(manager);
+        return;
+      }
+      if (action === 'add') {
+        get().executeTerminalCommand(`npm install ${args.slice(1).join(' ')}`);
+        return;
+      }
+      if (action === 'remove') {
+        get().executeTerminalCommand(`npm uninstall ${args.slice(1).join(' ')}`);
+        return;
+      }
+      if (action === 'run') {
+        get().executeTerminalCommand(`npm run ${args.slice(1).join(' ')}`);
+        return;
+      }
+      if (!action || action === 'install') {
+        get().addTerminalLog({ type: 'output', content: `${manager} install completed. Lockfile is virtualized.` });
+        return;
+      }
+      get().addTerminalLog({ type: 'error', content: `${manager}: unsupported virtual command "${action}"` });
+      return;
+    }
+
+    if (cmd === 'clear' || cmd === 'cls') {
       get().clearTerminal();
       return;
     }
@@ -1246,7 +1514,70 @@ export const useStore = create<AppStore>((set, get) => ({
       return;
     }
 
-    if (cmd === 'ls') {
+    if (cmd === 'whoami') {
+      get().addTerminalLog({ type: 'output', content: 'devdocks\\nethu012345' });
+      return;
+    }
+
+    if (cmd === 'date' || cmd === 'time') {
+      get().addTerminalLog({ type: 'output', content: new Date().toString() });
+      return;
+    }
+
+    if (cmd === 'history') {
+      const history = get().terminalCommandHistory;
+      get().addTerminalLog({
+        type: 'output',
+        content: history.length ? history.map((item, index) => `${index + 1}  ${item}`).join('\n') : '(no command history)'
+      });
+      return;
+    }
+
+    if (cmd === 'cd') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: 'cd error: Must open an active workspace first.' });
+        return;
+      }
+      const proj = get().projects[activeProjId];
+      const target = args[0] ? resolveVirtualPath(args[0]) : '';
+      if (!target) {
+        const sessions = get().terminalSessions.map((session) => session.id === get().activeTerminalSessionId ? { ...session, cwd: 'root' } : session);
+        set({ terminalCwd: 'root', terminalSessions: sessions });
+        saveStateToLocalStorage({ ...get(), terminalCwd: 'root', terminalSessions: sessions });
+        return;
+      }
+      if (proj.files[target]?.isFolder) {
+        const sessions = get().terminalSessions.map((session) => session.id === get().activeTerminalSessionId ? { ...session, cwd: target } : session);
+        set({ terminalCwd: target, terminalSessions: sessions });
+        saveStateToLocalStorage({ ...get(), terminalCwd: target, terminalSessions: sessions });
+      } else {
+        get().addTerminalLog({ type: 'error', content: `cd: no such directory: ${args[0]}` });
+      }
+      return;
+    }
+
+    if (cmd === 'echo') {
+      const redirectIndex = args.findIndex((arg) => arg === '>' || arg === '>>');
+      if (redirectIndex > -1) {
+        if (!activeProjId) {
+          get().addTerminalLog({ type: 'error', content: 'echo redirect error: Must open an active workspace first.' });
+          return;
+        }
+        const target = args[redirectIndex + 1];
+        if (!target) {
+          get().addTerminalLog({ type: 'error', content: 'echo redirect error: target file required' });
+          return;
+        }
+        const filePath = resolveVirtualPath(target);
+        const ok = writeVirtualFile(activeProjId, filePath, args.slice(0, redirectIndex).join(' '), args[redirectIndex] === '>>');
+        get().addTerminalLog(ok ? { type: 'success', content: `Wrote ${filePath}` } : { type: 'error', content: `echo: cannot write to ${filePath}` });
+        return;
+      }
+      get().addTerminalLog({ type: 'output', content: args.join(' ') });
+      return;
+    }
+
+    if (cmd === 'ls' || cmd === 'dir') {
       if (!activeProjId) {
         get().addTerminalLog({ type: 'error', content: 'No open projects found. Please open/create a project first.' });
         return;
@@ -1254,17 +1585,166 @@ export const useStore = create<AppStore>((set, get) => ({
       const proj = get().projects[activeProjId];
       if (!proj) return;
 
-      const items = Object.keys(proj.files);
+      const cwd = get().terminalCwd === 'root' ? '' : get().terminalCwd;
+      const items = Object.keys(proj.files).filter((path) => {
+        if (!cwd) return !path.includes('/');
+        if (!path.startsWith(cwd + '/')) return false;
+        return path.slice(cwd.length + 1).split('/').length === 1;
+      });
       if (items.length === 0) {
         get().addTerminalLog({ type: 'output', content: '(empty workspace directory)' });
       } else {
         const sorted = items.sort();
         const display = sorted.map((p) => {
           const isF = proj.files[p].isFolder;
-          return isF ? `📁 ${p}/` : `📄 ${p}`;
+          const label = p.split('/').pop() || p;
+          return isF ? `${label}/` : label;
         }).join('\n');
         get().addTerminalLog({ type: 'output', content: display });
       }
+      return;
+    }
+
+    if (cmd === 'tree') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: 'tree error: Must open an active workspace first.' });
+        return;
+      }
+      const proj = get().projects[activeProjId];
+      const sorted = Object.keys(proj.files).sort();
+      const display = sorted.map((p) => {
+        const depth = p.split('/').length - 1;
+        const name = p.split('/').pop() || p;
+        return `${'  '.repeat(depth)}${proj.files[p].isFolder ? '+ ' : '- '}${name}`;
+      }).join('\n');
+      get().addTerminalLog({ type: 'output', content: display || '(empty workspace tree)' });
+      return;
+    }
+
+    if (cmd === 'cat' || cmd === 'type') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: `${cmd} error: Must open an active workspace first.` });
+        return;
+      }
+      if (!args[0]) {
+        get().addTerminalLog({ type: 'error', content: `${cmd} error: file path argument required` });
+        return;
+      }
+      const proj = get().projects[activeProjId];
+      const filePath = resolveVirtualPath(args[0]);
+      const file = proj.files[filePath];
+      if (!file || file.isFolder) {
+        get().addTerminalLog({ type: 'error', content: `cat: no such file: ${args[0]}` });
+        return;
+      }
+      get().addTerminalLog({ type: 'output', content: file.content || '(empty file)' });
+      return;
+    }
+
+    if (cmd === 'code') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: 'code error: Must open an active workspace first.' });
+        return;
+      }
+      if (!args[0]) {
+        get().addTerminalLog({ type: 'error', content: 'code error: file path argument required' });
+        return;
+      }
+      const proj = get().projects[activeProjId];
+      const filePath = resolveVirtualPath(args[0]);
+      const file = proj.files[filePath];
+      if (!file || file.isFolder) {
+        get().addTerminalLog({ type: 'error', content: `code: no such file: ${args[0]}` });
+        return;
+      }
+      get().openTab(activeProjId, filePath);
+      get().addTerminalLog({ type: 'success', content: `Opened ${filePath}` });
+      return;
+    }
+
+    if (cmd === 'rm' || cmd === 'del' || cmd === 'rmdir') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: `${cmd} error: Must open an active workspace first.` });
+        return;
+      }
+      if (!args[0]) {
+        get().addTerminalLog({ type: 'error', content: `${cmd} error: path argument required` });
+        return;
+      }
+      const targetPath = resolveVirtualPath(args[0]);
+      if (!get().projects[activeProjId].files[targetPath]) {
+        get().addTerminalLog({ type: 'error', content: `${cmd}: no such path: ${args[0]}` });
+        return;
+      }
+      get().deleteFileOrFolder(activeProjId, targetPath);
+      get().addTerminalLog({ type: 'success', content: `Moved ${targetPath} to Recycle Bin.` });
+      return;
+    }
+
+    if (cmd === 'set-content' || cmd === 'add-content') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: `${cmd} error: Must open an active workspace first.` });
+        return;
+      }
+      if (!args[0]) {
+        get().addTerminalLog({ type: 'error', content: `${cmd} error: file path argument required` });
+        return;
+      }
+      const filePath = resolveVirtualPath(args[0]);
+      const contentArgs = args.filter((arg) => arg !== '-Value' && arg !== '-Path');
+      const content = contentArgs.slice(1).join(' ');
+      const ok = writeVirtualFile(activeProjId, filePath, content, cmd === 'add-content');
+      get().addTerminalLog(ok ? { type: 'success', content: `${cmd} completed for ${filePath}` } : { type: 'error', content: `${cmd}: cannot write to ${filePath}` });
+      return;
+    }
+
+    if (cmd === 'copy') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: 'copy error: Must open an active workspace first.' });
+        return;
+      }
+      if (!args[0] || !args[1]) {
+        get().addTerminalLog({ type: 'error', content: 'copy error: source and destination required' });
+        return;
+      }
+      const proj = get().projects[activeProjId];
+      const sourcePath = resolveVirtualPath(args[0]);
+      const destPath = resolveVirtualPath(args[1]);
+      const source = proj.files[sourcePath];
+      if (!source) {
+        get().addTerminalLog({ type: 'error', content: `copy: no such path: ${args[0]}` });
+        return;
+      }
+      if (source.isFolder) {
+        const copied = Object.keys(proj.files).filter((p) => p === sourcePath || p.startsWith(sourcePath + '/'));
+        copied.forEach((p) => {
+          const item = proj.files[p];
+          const nextPath = p === sourcePath ? destPath : `${destPath}/${p.slice(sourcePath.length + 1)}`;
+          if (item.isFolder) get().createFolder(activeProjId, nextPath);
+          else writeVirtualFile(activeProjId, nextPath, item.content || '');
+        });
+      } else {
+        writeVirtualFile(activeProjId, destPath, source.content || '');
+      }
+      get().addTerminalLog({ type: 'success', content: `Copied ${sourcePath} to ${destPath}` });
+      return;
+    }
+
+    if (cmd === 'move' || cmd === 'rename') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: `${cmd} error: Must open an active workspace first.` });
+        return;
+      }
+      if (!args[0] || !args[1]) {
+        get().addTerminalLog({ type: 'error', content: `${cmd} error: source and destination required` });
+        return;
+      }
+      const sourcePath = resolveVirtualPath(args[0]);
+      const destPath = cmd === 'rename' && !args[1].includes('/')
+        ? [...sourcePath.split('/').slice(0, -1), args[1]].filter(Boolean).join('/')
+        : resolveVirtualPath(args[1]);
+      const ok = get().renameFileOrFolder(activeProjId, sourcePath, destPath);
+      get().addTerminalLog(ok ? { type: 'success', content: `Moved ${sourcePath} to ${destPath}` } : { type: 'error', content: `${cmd}: failed to move ${sourcePath}` });
       return;
     }
 
@@ -1277,13 +1757,33 @@ export const useStore = create<AppStore>((set, get) => ({
         get().addTerminalLog({ type: 'error', content: 'mkdir error: directory name argument required' });
         return;
       }
-      const dirPath = args[0];
+      const dirPath = resolveVirtualPath(args[0]);
       const success = get().createFolder(activeProjId, dirPath);
       if (success) {
         get().addTerminalLog({ type: 'success', content: `Created directory "${dirPath}" successfully` });
       } else {
         get().addTerminalLog({ type: 'error', content: `mkdir: failed to create directory "${dirPath}" (path conflict)` });
       }
+      return;
+    }
+
+    if (cmd === 'new-item') {
+      if (!activeProjId) {
+        get().addTerminalLog({ type: 'error', content: 'New-Item error: Must open an active workspace first.' });
+        return;
+      }
+      const target = args.find((arg) => !arg.startsWith('-'));
+      if (!target) {
+        get().addTerminalLog({ type: 'error', content: 'New-Item error: path argument required' });
+        return;
+      }
+      const lowerArgs = args.map((arg) => arg.toLowerCase());
+      const asDirectory = lowerArgs.includes('directory') || lowerArgs.includes('-itemtype') && lowerArgs.includes('directory');
+      const targetPath = resolveVirtualPath(target);
+      const success = asDirectory
+        ? get().createFolder(activeProjId, targetPath)
+        : get().createFile(activeProjId, targetPath, '');
+      get().addTerminalLog(success ? { type: 'success', content: `Created ${targetPath}` } : { type: 'error', content: `New-Item: path conflict ${targetPath}` });
       return;
     }
 
@@ -1296,7 +1796,7 @@ export const useStore = create<AppStore>((set, get) => ({
         get().addTerminalLog({ type: 'error', content: 'touch error: fileName required' });
         return;
       }
-      const fPath = args[0];
+      const fPath = resolveVirtualPath(args[0]);
       const success = get().createFile(activeProjId, fPath, '// new empty file');
       if (success) {
         get().addTerminalLog({ type: 'success', content: `File "${fPath}" created successfully` });
@@ -1307,23 +1807,80 @@ export const useStore = create<AppStore>((set, get) => ({
     }
 
     if (cmd === 'npm') {
+      if (args[0] === '-v' || args[0] === '--version' || args[0] === 'version') {
+        printVersion('npm');
+        return;
+      }
+      if (args[0] === 'help' || args[0] === '--help' || args[0] === '-h') {
+        get().addTerminalLog({ type: 'output', content: 'npm virtual commands:\n  npm -v\n  npm install <pkg>\n  npm uninstall <pkg>\n  npm list\n  npm view <pkg>\n  npm run [script]\n  npm audit\n  npm outdated' });
+        return;
+      }
       if (!activeProjId) {
         get().addTerminalLog({ type: 'error', content: 'npm tasks failed: No active workspace opened' });
         return;
       }
       const action = args[0];
-      if (action === 'install') {
+      if (!action) {
+        get().addTerminalLog({ type: 'output', content: 'npm <command>\n\nUsage: npm install <pkg>, npm run dev, npm list, npm -v' });
+        return;
+      }
+      if (action === 'audit') {
+        get().addTerminalLog({ type: 'success', content: 'found 0 vulnerabilities in virtual dependency graph' });
+        return;
+      }
+      if (action === 'outdated') {
+        get().addTerminalLog({ type: 'output', content: 'Package           Current   Wanted   Latest\n(all virtual dependencies are using selected versions)' });
+        return;
+      }
+      if (action === 'init') {
+        const proj = get().projects[activeProjId];
+        if (proj.files['package.json']) {
+          get().addTerminalLog({ type: 'output', content: 'package.json already exists' });
+        } else {
+          writeVirtualFile(activeProjId, 'package.json', JSON.stringify({ name: proj.name.toLowerCase().replace(/[^a-z0-9-]/g, '-'), version: '1.0.0', dependencies: {} }, null, 2));
+          get().addTerminalLog({ type: 'success', content: 'Wrote package.json' });
+        }
+        return;
+      }
+      if (action === 'list' || action === 'ls') {
+        const proj = get().projects[activeProjId];
+        get().addTerminalLog({
+          type: 'output',
+          content: proj.installedPackages.length ? proj.installedPackages.map((pkg) => `+-- ${pkg}`).join('\n') : '(no dependencies installed)'
+        });
+        return;
+      }
+      if (action === 'view' || action === 'info') {
+        const pkgName = args[1];
+        if (!pkgName) {
+          get().addTerminalLog({ type: 'error', content: `npm ${action}: package name required` });
+          return;
+        }
+        const proj = get().projects[activeProjId];
+        const pkgFile = proj.files['package.json'];
+        let version = proj.installedPackages.includes(pkgName) ? 'installed' : 'not installed';
+        try {
+          const parsed = pkgFile ? JSON.parse(pkgFile.content) : {};
+          version = parsed.dependencies?.[pkgName] || version;
+        } catch (err) {}
+        get().addTerminalLog({ type: 'output', content: `${pkgName}\nversion: ${version}\nregistry: npm\nstatus: ${proj.installedPackages.includes(pkgName) ? 'installed' : 'available'}` });
+        return;
+      }
+      if (action === 'install' || action === 'i' || action === 'add') {
         const pkg_name = args[1];
         if (!pkg_name) {
           get().addTerminalLog({ type: 'output', content: 'npm WARN: running bare npm install to audit node_modules... Success' });
           return;
         }
-        get().addTerminalLog({ type: 'system', content: `Resolving dependency tree from CDN registry for "${pkg_name}"...` });
+        const atIndex = pkg_name.startsWith('@') ? pkg_name.indexOf('@', 1) : pkg_name.indexOf('@');
+        const cleanName = atIndex > 0 ? pkg_name.slice(0, atIndex) : pkg_name;
+        const version = atIndex > 0 ? pkg_name.slice(atIndex + 1) : 'latest';
+        get().addTerminalLog({ type: 'system', content: `Resolving dependency tree from npm registry for "${cleanName}"...` });
         setTimeout(() => {
-          get().installPackage(activeProjId, pkg_name);
-          get().addTerminalLog({ type: 'success', content: `+ ${pkg_name}@latest nested dependency download complete. Saved to package.json dependencies list.` });
+          get().installPackage(activeProjId, cleanName, version);
+          get().addTerminalLog({ type: 'success', content: `+ ${cleanName}@${version} dependency download complete. Saved to package.json dependencies list.` });
         }, 800);
-      } else if (action === 'uninstall') {
+      } else if (action === 'uninstall' || action === 'remove' || action === 'rm') {
         const pkg_name = args[1];
         if (!pkg_name) {
           get().addTerminalLog({ type: 'error', content: 'npm error: Specify package name to remove' });
@@ -1336,6 +1893,10 @@ export const useStore = create<AppStore>((set, get) => ({
         }, 500);
       } else if (action === 'run') {
         const script = args[1];
+        if (!script) {
+          get().addTerminalLog({ type: 'output', content: 'Lifecycle scripts included in package.json:\n  dev\n    vite --host 0.0.0.0\n  build\n    vite build\n  preview\n    vite preview' });
+          return;
+        }
         if (script === 'dev') {
           get().addTerminalLog({ type: 'system', content: `Starting development asset bundler server on post 3000...` });
           get().addTerminalLog({ type: 'success', content: `Vite v5.2 Ready inside sandbox iframe. Transpilation hot reload active.` });
@@ -1346,8 +1907,15 @@ export const useStore = create<AppStore>((set, get) => ({
           get().addTerminalLog({ type: 'error', content: `No npm script found called: "${script}". Please check package.json.` });
         }
       } else {
-        get().addTerminalLog({ type: 'error', content: 'npm ERR: Unknown Action command. Supports: install, uninstall, run' });
+        get().addTerminalLog({ type: 'error', content: `npm ERR: Unknown command "${action}". Try npm help.` });
       }
+      return;
+    }
+
+    if (cmd === 'where' || cmd === 'which') {
+      const target = args[0];
+      const known = ['node', 'npm', 'npx', 'git', 'yarn', 'pnpm', 'code'].includes(target || '');
+      get().addTerminalLog({ type: known ? 'output' : 'error', content: known ? `/usr/local/bin/${target}` : `${cmd}: ${target || ''} not found` });
       return;
     }
 
@@ -1356,10 +1924,69 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   clearTerminal: () => {
-    set({ terminalLogs: [] });
+    const activeSessionId = get().activeTerminalSessionId;
+    set((state) => {
+      const terminalLogs = state.terminalLogs.filter((log) => log.sessionId !== activeSessionId);
+      const updated = {
+        ...state,
+        terminalLogs
+      };
+      saveStateToLocalStorage(updated);
+      return updated;
+    });
+  },
+
+  createTerminalSession: () => {
+    const id = 'terminal_' + Math.random().toString(36).substring(2, 8);
+    const session: TerminalSession = {
+      id,
+      name: `powershell ${get().terminalSessions.length + 1}`,
+      cwd: 'root',
+      createdAt: new Date().toLocaleTimeString()
+    };
+    set((state) => {
+      const updated = {
+        ...state,
+        terminalSessions: [...state.terminalSessions, session],
+        activeTerminalSessionId: id,
+        terminalCwd: session.cwd,
+        terminalOpen: true
+      };
+      saveStateToLocalStorage(updated);
+      return updated;
+    });
+    get().addTerminalLog({ type: 'system', content: 'PowerShell terminal session started.', sessionId: id });
+    return id;
+  },
+
+  closeTerminalSession: (sessionId) => {
+    set((state) => {
+      const remaining = state.terminalSessions.filter((session) => session.id !== sessionId);
+      const terminalSessions = remaining.length ? remaining : [DEFAULT_TERMINAL_SESSION];
+      const activeTerminalSessionId = state.activeTerminalSessionId === sessionId
+        ? terminalSessions[terminalSessions.length - 1].id
+        : state.activeTerminalSessionId;
+      const activeSession = terminalSessions.find((session) => session.id === activeTerminalSessionId) || terminalSessions[0];
+      const updated = {
+        ...state,
+        terminalSessions,
+        activeTerminalSessionId: activeSession.id,
+        terminalCwd: activeSession.cwd,
+        terminalLogs: state.terminalLogs.filter((log) => log.sessionId !== sessionId)
+      };
+      saveStateToLocalStorage(updated);
+      return updated;
+    });
+  },
+
+  setActiveTerminalSession: (sessionId) => {
+    const session = get().terminalSessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    set({ activeTerminalSessionId: sessionId, terminalCwd: session.cwd });
     saveStateToLocalStorage({
       ...get(),
-      terminalLogs: []
+      activeTerminalSessionId: sessionId,
+      terminalCwd: session.cwd
     });
   },
 

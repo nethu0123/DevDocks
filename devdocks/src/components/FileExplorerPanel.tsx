@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { 
-  File, Folder, FolderOpen, Plus, FilePlus, FolderPlus, 
-  Trash2, Edit, ChevronDown, ChevronRight, Check, X, FileTerminal, LayoutTemplate 
+import {
+  File, Folder, FolderOpen, FilePlus, FolderPlus, Trash2, Edit,
+  ChevronDown, ChevronRight, Check, X, LayoutTemplate, Braces,
+  FileCode2, FileJson, Palette, FileType, Settings
 } from 'lucide-react';
 import { Project, FileNode } from '../types';
 
@@ -14,7 +15,16 @@ interface FileExplorerPanelProps {
   onOpenFile: (path: string) => void;
   activeFile: string | null;
   unsavedDrafts: Record<string, string>;
+  materialIcons?: boolean;
 }
+
+type TreeEntry = {
+  path: string;
+  name: string;
+  isFolder: boolean;
+  node?: FileNode;
+  children: Record<string, TreeEntry>;
+};
 
 export default function FileExplorerPanel({
   project,
@@ -24,37 +34,17 @@ export default function FileExplorerPanel({
   onDelete,
   onOpenFile,
   activeFile,
-  unsavedDrafts
+  unsavedDrafts,
+  materialIcons = false
 }: FileExplorerPanelProps) {
-  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({
-    'src': true, // Keep src open by default
-  });
-  
-  // Inputs for adding new item
+  const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({ src: true });
   const [showAddInput, setShowAddInput] = useState<{ type: 'file' | 'folder'; parent: string } | null>(null);
   const [newItemName, setNewItemName] = useState('');
-  
-  // Input for renaming an item
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [renamedName, setRenamedName] = useState('');
 
-  // Auto discover directories that exist on the flat files object
-  const getDirs = (): string[] => {
-    const dirs = new Set<string>();
-    Object.keys(project.files).forEach((path) => {
-      const parts = path.split('/');
-      parts.pop(); // Remove file name
-      let running = '';
-      parts.forEach((p) => {
-        running = running ? `${running}/${p}` : p;
-        dirs.add(running);
-      });
-    });
-    return Array.from(dirs);
-  };
-
   const toggleExpand = (dir: string) => {
-    setExpandedPaths(prev => ({ ...prev, [dir]: !prev[dir] }));
+    setExpandedPaths((prev) => ({ ...prev, [dir]: prev[dir] === false }));
   };
 
   const handleStartCreate = (type: 'file' | 'folder', parentPath: string) => {
@@ -64,19 +54,15 @@ export default function FileExplorerPanel({
 
   const handleConfirmCreate = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newItemName.trim()) return;
+    if (!newItemName.trim() || !showAddInput) return;
 
-    let targetPath = newItemName.trim();
-    if (showAddInput?.parent) {
-      targetPath = `${showAddInput.parent}/${targetPath}`;
-    }
+    const name = newItemName.trim().replace(/^\/+/, '');
+    const targetPath = showAddInput.parent ? `${showAddInput.parent}/${name}` : name;
 
-    if (showAddInput?.type === 'file') {
-      onCreateFile(targetPath);
-    } else if (showAddInput?.type === 'folder') {
-      onCreateFolder(targetPath);
-    }
+    if (showAddInput.type === 'file') onCreateFile(targetPath);
+    else onCreateFolder(targetPath);
 
+    setExpandedPaths((prev) => showAddInput.parent ? { ...prev, [showAddInput.parent]: true } : prev);
     setShowAddInput(null);
     setNewItemName('');
   };
@@ -96,89 +82,92 @@ export default function FileExplorerPanel({
     parts.push(renamedName.trim());
     const newPath = parts.join('/');
 
-    if (onRename(oldPath, newPath)) {
-      setEditingPath(null);
-    }
+    if (onRename(oldPath, newPath)) setEditingPath(null);
   };
 
   const handleDeleteClick = (e: React.MouseEvent, path: string) => {
     e.stopPropagation();
-    if (confirm(`Move "${path}" to Recycle Bin?`)) {
-      onDelete(path);
-    }
+    if (confirm(`Move "${path}" to Recycle Bin?`)) onDelete(path);
   };
 
-  // Build tree representation on the fly 
-  const filesList = Object.values(project.files);
+  const fileIcon = (path: string) => {
+    const lower = path.toLowerCase();
+    const reactColor = materialIcons ? 'text-[#61dafb]' : 'text-[#58a6ff]';
+    const scriptColor = materialIcons ? 'text-[#facc15]' : 'text-[#f7df1e]';
+    const jsonColor = materialIcons ? 'text-[#f97316]' : 'text-[#f59e0b]';
+    const cssColor = materialIcons ? 'text-[#38bdf8]' : 'text-[#38bdf8]';
+    const htmlColor = materialIcons ? 'text-[#e34c26]' : 'text-[#ff7b72]';
+    const configColor = materialIcons ? 'text-[#a78bfa]' : 'text-[#a5d6ff]';
+    if (lower.endsWith('.tsx') || lower.endsWith('.jsx')) return <LayoutTemplate size={13.5} className={reactColor} />;
+    if (lower.endsWith('.ts') || lower.endsWith('.js')) return <FileCode2 size={13.5} className={scriptColor} />;
+    if (lower.endsWith('.json')) return <FileJson size={13.5} className={jsonColor} />;
+    if (lower.endsWith('.css') || lower.endsWith('.scss') || lower.endsWith('.sass')) return <Palette size={13.5} className={cssColor} />;
+    if (lower.endsWith('.html')) return <Braces size={13.5} className={htmlColor} />;
+    if (lower.endsWith('.md')) return <FileType size={13.5} className="text-[#c9d1d9]" />;
+    if (lower.includes('config') || lower.endsWith('.env')) return <Settings size={13.5} className={configColor} />;
+    return <File size={13.5} className="text-[#8b949e]" />;
+  };
 
-  // Group files by nested level
-  const renderTreeNodes = () => {
-    // Sort directories and file nodes
-    const sortedPaths = Object.keys(project.files).sort((a, b) => {
-      const nodeA = project.files[a];
-      const nodeB = project.files[b];
-      
-      // Directory first, case-insensitive alphabetically
-      if (nodeA.isFolder && !nodeB.isFolder) return -1;
-      if (!nodeA.isFolder && nodeB.isFolder) return 1;
-      return a.localeCompare(b);
+  const buildTree = () => {
+    const root: TreeEntry = { path: '', name: '', isFolder: true, children: {} };
+
+    Object.values(project.files).forEach((node) => {
+      const parts = node.path.split('/').filter(Boolean);
+      let current = root;
+      let running = '';
+
+      parts.forEach((part, index) => {
+        running = running ? `${running}/${part}` : part;
+        const isLast = index === parts.length - 1;
+        const isFolder = isLast ? node.isFolder : true;
+
+        if (!current.children[part]) {
+          current.children[part] = {
+            path: running,
+            name: part,
+            isFolder,
+            node: isLast ? node : undefined,
+            children: {}
+          };
+        }
+
+        if (isLast) {
+          current.children[part].isFolder = node.isFolder;
+          current.children[part].node = node;
+        }
+
+        current = current.children[part];
+      });
     });
 
-    // We can render items depending on whether their parents are expanded
-    return sortedPaths.map((path) => {
-      const file = project.files[path];
-      const parts = path.split('/');
-      const name = parts.pop() || path;
-      const depth = parts.length;
-      
-      // Check if item's parent is collapsed
-      let isVisible = true;
-      let currentParent = '';
-      for (const parent of parts) {
-        currentParent = currentParent ? `${currentParent}/${parent}` : parent;
-        if (expandedPaths[currentParent] === false) {
-          isVisible = false;
-          break;
-        }
-      }
+    return root;
+  };
 
-      if (!isVisible) return null;
+  const sortEntries = (entries: TreeEntry[]) => entries.sort((a, b) => {
+    if (a.isFolder && !b.isFolder) return -1;
+    if (!a.isFolder && b.isFolder) return 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
 
-      const isFolder = file.isFolder;
-      const isExpanded = !!expandedPaths[path];
-      const isActive = activeFile === path;
-      const hasUnsaved = unsavedDrafts[path] !== undefined;
+  const renderEntry = (entry: TreeEntry, depth: number): React.ReactNode => {
+    const isExpanded = expandedPaths[entry.path] !== false;
+    const isActive = activeFile === entry.path;
+    const hasUnsaved = unsavedDrafts[entry.path] !== undefined;
+    const children = sortEntries(Object.values(entry.children));
 
-      const fileIcon = () => {
-        if (path.endsWith('.tsx') || path.endsWith('.jsx')) {
-          return <LayoutTemplate size={13.5} className="text-[#58a6ff]" />;
-        }
-        if (path.endsWith('.css')) {
-          return <File size={13.5} className="text-[#38bdf8]" />;
-        }
-        if (path.endsWith('.json')) {
-          return <File size={13.5} className="text-[#f59e0b]" />;
-        }
-        return <File size={13.5} className="text-[#8b949e]" />;
-      };
-
-      return (
+    return (
+      <React.Fragment key={entry.path}>
         <div
-          key={path}
-          style={{ paddingLeft: `${depth * 8 + 6}px` }}
-          onClick={() => {
-            if (isFolder) toggleExpand(path);
-            else onOpenFile(path);
-          }}
+          style={{ paddingLeft: `${depth * 12 + 6}px` }}
+          onClick={() => entry.isFolder ? toggleExpand(entry.path) : onOpenFile(entry.path)}
           className={`group flex items-center justify-between h-7 py-1 pr-1.5 rounded font-mono text-[11px] cursor-pointer select-none transition ${
-            isActive 
-              ? 'bg-[#1f242c] text-[#58a6ff] font-semibold border-l-2 border-[#58a6ff]' 
+            isActive
+              ? 'bg-[#1f242c] text-[#58a6ff] font-semibold border-l-2 border-[#58a6ff]'
               : 'text-[#c9d1d9] hover:bg-[#1f242c] hover:text-white'
           }`}
         >
-          {/* Row label */}
           <div className="flex items-center gap-1.5 flex-1 min-w-0 pr-1">
-            {isFolder ? (
+            {entry.isFolder ? (
               <span className="text-[#8b949e]">
                 {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
               </span>
@@ -186,20 +175,16 @@ export default function FileExplorerPanel({
               <span className="w-3" />
             )}
 
-            {isFolder ? (
-              isExpanded 
+            {entry.isFolder ? (
+              isExpanded
                 ? <FolderOpen size={13} className="text-amber-400 shrink-0" />
                 : <Folder size={13} className="text-amber-400 shrink-0" />
             ) : (
-              <span className="shrink-0">{fileIcon()}</span>
+              <span className="shrink-0">{fileIcon(entry.path)}</span>
             )}
 
-            {editingPath === path ? (
-              <form 
-                onSubmit={(e) => handleConfirmRename(e, path)} 
-                onClick={(e) => e.stopPropagation()} 
-                className="flex items-center gap-1 flex-1"
-              >
+            {editingPath === entry.path ? (
+              <form onSubmit={(e) => handleConfirmRename(e, entry.path)} onClick={(e) => e.stopPropagation()} className="flex items-center gap-1 flex-1">
                 <input
                   type="text"
                   value={renamedName}
@@ -210,71 +195,46 @@ export default function FileExplorerPanel({
               </form>
             ) : (
               <span className="truncate flex items-center gap-1">
-                {name}
-                {hasUnsaved && <span className="h-1.5 w-1.5 rounded-full bg-[#58a6ff] inline-block animate-pulse shrink-0" title="Unsaved changes (●)" />}
+                {entry.name}
+                {hasUnsaved && <span className="h-1.5 w-1.5 rounded-full bg-[#58a6ff] inline-block animate-pulse shrink-0" title="Unsaved changes" />}
               </span>
             )}
           </div>
 
-          {/* Quick Trigger Tooltips actions */}
           <div className="hidden group-hover:flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-            {isFolder && (
+            {entry.isFolder && (
               <>
-                <button
-                  onClick={() => handleStartCreate('file', path)}
-                  className="p-1 rounded text-[#8b949e] hover:text-white hover:bg-[#0d1117] transition cursor-pointer"
-                  title="Create File"
-                >
+                <button onClick={() => handleStartCreate('file', entry.path)} className="p-1 rounded text-[#8b949e] hover:text-white hover:bg-[#0d1117] transition cursor-pointer" title="Create File">
                   <FilePlus size={10} />
                 </button>
-                <button
-                  onClick={() => handleStartCreate('folder', path)}
-                  className="p-1 rounded text-[#8b949e] hover:text-white hover:bg-[#0d1117] transition cursor-pointer"
-                  title="Create Folder"
-                >
+                <button onClick={() => handleStartCreate('folder', entry.path)} className="p-1 rounded text-[#8b949e] hover:text-white hover:bg-[#0d1117] transition cursor-pointer" title="Create Folder">
                   <FolderPlus size={10} />
                 </button>
               </>
             )}
-            <button
-              onClick={(e) => handleStartRename(e, path)}
-              className="p-1 rounded text-[#8b949e] hover:text-white hover:bg-[#0d1117] transition cursor-pointer"
-              title="Rename"
-            >
+            <button onClick={(e) => handleStartRename(e, entry.path)} className="p-1 rounded text-[#8b949e] hover:text-white hover:bg-[#0d1117] transition cursor-pointer" title="Rename">
               <Edit size={10} />
             </button>
-            <button
-              onClick={(e) => handleDeleteClick(e, path)}
-              className="p-1 rounded text-[#8b949e] hover:text-red-400 hover:bg-[#0d1117] transition cursor-pointer"
-              title="Delete to Trash"
-            >
+            <button onClick={(e) => handleDeleteClick(e, entry.path)} className="p-1 rounded text-[#8b949e] hover:text-red-400 hover:bg-[#0d1117] transition cursor-pointer" title="Delete to Trash">
               <Trash2 size={10} />
             </button>
           </div>
-
         </div>
-      );
-    });
+        {entry.isFolder && isExpanded && children.map((child) => renderEntry(child, depth + 1))}
+      </React.Fragment>
+    );
   };
+
+  const rootEntries = sortEntries(Object.values(buildTree().children));
 
   return (
     <div className="flex flex-col h-full overflow-hidden select-none">
-      
-      {/* File Explorer Panels Head */}
       <div className="flex items-center justify-between px-3 h-9 border-b border-[#30363d] bg-[#161b22] shrink-0">
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => handleStartCreate('file', '')}
-            className="p-1 hover:bg-[#0d1117] rounded text-[#8b949e] hover:text-white transition duration-150 cursor-pointer"
-            title="Create File in Root"
-          >
+          <button onClick={() => handleStartCreate('file', '')} className="p-1 hover:bg-[#0d1117] rounded text-[#8b949e] hover:text-white transition duration-150 cursor-pointer" title="Create File in Root">
             <FilePlus size={13} />
           </button>
-          <button
-            onClick={() => handleStartCreate('folder', '')}
-            className="p-1 hover:bg-[#0d1117] rounded text-[#8b949e] hover:text-white transition duration-150 cursor-pointer"
-            title="Create Folder in Root"
-          >
+          <button onClick={() => handleStartCreate('folder', '')} className="p-1 hover:bg-[#0d1117] rounded text-[#8b949e] hover:text-white transition duration-150 cursor-pointer" title="Create Folder in Root">
             <FolderPlus size={13} />
           </button>
         </div>
@@ -283,12 +243,11 @@ export default function FileExplorerPanel({
         </span>
       </div>
 
-      {/* Adding Inputs Row */}
       {showAddInput && (
         <div className="px-3.5 py-2 bg-[#161b22] border-b border-[#30363d] shrink-0">
           <form onSubmit={handleConfirmCreate} className="flex flex-col gap-1 text-xs">
             <span className="font-mono font-bold text-[9px] text-[#8b949e] tracking-wider">
-              NEW {showAddInput.type === 'file' ? 'FILE' : 'FOLDER'} 
+              NEW {showAddInput.type === 'file' ? 'FILE' : 'FOLDER'}
               {showAddInput.parent ? ` IN /${showAddInput.parent}` : ''}
             </span>
             <div className="flex items-center gap-1 bg-[#0d1117] px-2 h-7 rounded border border-[#30363d] focus-within:border-[#58a6ff]">
@@ -311,17 +270,14 @@ export default function FileExplorerPanel({
         </div>
       )}
 
-      {/* Explorer Tree scroll container */}
       <div className="flex-1 overflow-y-auto p-2 scrollbar-none space-y-0.5">
-        
-        {filesList.length === 0 ? (
+        {rootEntries.length === 0 ? (
           <div className="text-center py-10 px-4 font-sans space-y-2">
             <p className="text-slate-500 text-xs">No files yet. Click + to create.</p>
           </div>
         ) : (
-          renderTreeNodes()
+          rootEntries.map((entry) => renderEntry(entry, 0))
         )}
-
       </div>
     </div>
   );

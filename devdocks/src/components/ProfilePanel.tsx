@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { User, Library, Award, Calendar, ExternalLink, Activity, Sparkles, Building2 } from 'lucide-react';
+import React from 'react';
+import { User, ExternalLink } from 'lucide-react';
 import { Project } from '../types';
 
 interface ProfilePanelProps {
@@ -14,11 +14,7 @@ export default function ProfilePanel({
   onSelectProject
 }: ProfilePanelProps) {
   const projectList = Object.values(projects);
-  const [selectedDetailsId, setSelectedDetailsId] = useState<string | null>(
-    activeProjectId || (projectList.length > 0 ? projectList[0].id : null)
-  );
-
-  const activeDetails = selectedDetailsId ? projects[selectedDetailsId] : null;
+  const activeDetails = activeProjectId ? projects[activeProjectId] : (projectList[0] || null);
 
   return (
     <div className="flex flex-col h-full overflow-hidden select-none">
@@ -49,14 +45,10 @@ export default function ProfilePanel({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-[#30363d]">
+          <div className="grid grid-cols-1 gap-2 mt-3 pt-3 border-t border-[#30363d]">
             <div className="text-center bg-[#0d1117] p-2 rounded border border-[#30363d]">
               <span className="text-[9px] uppercase font-mono font-bold text-[#8b949e] block">Workspaces</span>
               <span className="text-xs font-bold text-[#58a6ff] font-mono mt-0.5 block">{projectList.length}</span>
-            </div>
-            <div className="text-center bg-[#0d1117] p-2 rounded border border-[#30363d]">
-              <span className="text-[9px] uppercase font-mono font-bold text-[#8b949e] block">XP Rank</span>
-              <span className="text-xs font-bold text-emerald-400 font-mono mt-0.5 block">Lvl Gold</span>
             </div>
           </div>
         </div>
@@ -110,31 +102,6 @@ export default function ProfilePanel({
               Select or open a workspace in the grid first.
             </div>
           )}
-        </div>
-
-        {/* Workspace index directory lists */}
-        <div>
-          <div className="flex items-center gap-1.5 mb-2">
-            <Library size={11} className="text-[#8b949e]" />
-            <span className="text-[9px] uppercase font-mono font-bold tracking-wider text-[#8b949e]">All Workspaces Grid ({projectList.length})</span>
-          </div>
-
-          <div className="space-y-1 max-h-[160px] overflow-y-auto pr-1">
-            {projectList.map((p) => (
-              <div
-                key={p.id}
-                onClick={() => setSelectedDetailsId(p.id)}
-                className={`p-2 rounded border text-xs font-mono flex items-center justify-between cursor-pointer transition select-none ${
-                  selectedDetailsId === p.id
-                    ? 'bg-[#1f242c] border-[#58a6ff] text-[#58a6ff]'
-                    : 'bg-[#161b22] border-[#30363d] text-[#c9d1d9] hover:bg-[#1f242c]'
-                }`}
-              >
-                <span className="font-bold truncate max-w-[125px]">{p.name}</span>
-                <span className="text-[8.5px] text-[#8b949e] shrink-0">{p.techStack.length} units</span>
-              </div>
-            ))}
-          </div>
         </div>
 
       </div>
