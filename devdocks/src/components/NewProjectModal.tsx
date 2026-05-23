@@ -9,14 +9,13 @@ interface NewProjectModalProps {
 }
 
 const TECH_OPTIONS = [
-  { id: 'React', label: 'React', desc: 'Auto bundles react & react-dom components', defaultChecked: true },
-  { id: 'TypeScript', label: 'TypeScript', desc: 'Enables custom type-checking & compiler helpers', defaultChecked: true },
-  { id: 'Tailwind CSS', label: 'Tailwind CSS', desc: 'Adds Tailwind CSS utility integrations', defaultChecked: true },
-  { id: 'Framer Motion', label: 'Framer Motion', desc: 'Adds framer-motion library tags', defaultChecked: false },
-  { id: 'Zustand', label: 'Zustand', desc: 'Adds Zustand light weight reactive state store', defaultChecked: false },
-  { id: 'Axios', label: 'Axios', desc: 'For robust promise-based browser requests', defaultChecked: false },
-  { id: 'React Router', label: 'React Router', desc: 'Includes client-side virtual routing packages', defaultChecked: false },
-  { id: 'Lucide React', label: 'Lucide React', desc: 'Enables access to beautiful icon badges', defaultChecked: true },
+  { id: 'TypeScript', label: 'TypeScript', desc: 'Adds typescript and React type packages.', group: 'Core', defaultChecked: true },
+  { id: 'Tailwind CSS', label: 'Tailwind CSS', desc: 'Adds tailwindcss, postcss, and autoprefixer.', group: 'Styling', defaultChecked: true },
+  { id: 'Lucide React', label: 'Lucide React', desc: 'Adds lucide-react icon components.', group: 'UI', defaultChecked: true },
+  { id: 'Zustand', label: 'Zustand', desc: 'Adds lightweight React state management.', group: 'State', defaultChecked: false },
+  { id: 'React Router', label: 'React Router', desc: 'Adds react-router-dom for client routing.', group: 'Routing', defaultChecked: false },
+  { id: 'Axios', label: 'Axios', desc: 'Adds a promise-based HTTP client.', group: 'Data', defaultChecked: false },
+  { id: 'Framer Motion', label: 'Framer Motion', desc: 'Adds animation components for React.', group: 'Motion', defaultChecked: false },
 ];
 
 export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjectModalProps) {
@@ -28,9 +27,6 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
   const [error, setError] = useState('');
 
   const handleToggleTech = (techId: string) => {
-    // React is mandatory for these templates
-    if (techId === 'React') return;
-    
     setTechStack(prev => 
       prev.includes(techId) ? prev.filter(t => t !== techId) : [...prev, techId]
     );
@@ -78,7 +74,7 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
             {/* Modal Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-[#30363d] bg-[#161b22]">
               <div className="flex items-center gap-3">
-                <div className="h-8 w-8 rounded bg-[#0d1117] border border-[#30363d] flex items-center justify-center text-[#58a6ff]">
+                <div className="h-8 w-8 rounded bg-[#0d1117] border border-[#30363d] flex items-center justify-center text-[#c084fc]">
                   <Layers size={15} />
                 </div>
                 <div>
@@ -100,7 +96,7 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
               {/* Name Section */}
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono font-bold text-[#8b949e] uppercase tracking-wider block">
-                  Project Name <span className="text-[#58a6ff]">*</span>
+                  Project Name <span className="text-[#c084fc]">*</span>
                 </label>
                 <input
                   type="text"
@@ -110,7 +106,7 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
                     setName(e.target.value);
                     if (e.target.value.trim()) setError('');
                   }}
-                  className="w-full h-9 px-3 rounded bg-[#161b22] border border-[#30363d] text-[#c9d1d9] placeholder-[#8b949e] text-xs focus:border-[#58a6ff] outline-none transition"
+                  className="w-full h-9 px-3 rounded bg-[#161b22] border border-[#30363d] text-[#c9d1d9] placeholder-[#8b949e] text-xs focus:border-[#c084fc] outline-none transition"
                   autoFocus
                 />
                 {error && <span className="text-xs text-red-400 font-medium">{error}</span>}
@@ -125,7 +121,7 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
                   placeholder="Optional summary or notes about this development workspace"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  className="w-full min-h-[56px] p-3 rounded bg-[#161b22] border border-[#30363d] text-[#c9d1d9] placeholder-[#8b949e] text-xs focus:border-[#58a6ff] outline-none transition resize-none"
+                  className="w-full min-h-[56px] p-3 rounded bg-[#161b22] border border-[#30363d] text-[#c9d1d9] placeholder-[#8b949e] text-xs focus:border-[#c084fc] outline-none transition resize-none"
                 />
               </div>
 
@@ -135,7 +131,10 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
                   <label className="text-[10px] font-mono font-bold text-[#8b949e] uppercase tracking-wider block">
                     Prearrange Dependencies Stack
                   </label>
-                  <span className="text-[9px] text-[#8b949e] font-mono">React 19 Environment</span>
+                  <span className="text-[9px] text-[#8b949e] font-mono">React + Vite included</span>
+                </div>
+                <div className="rounded border border-[#30363d] bg-[#161b22] px-3 py-2 text-[10px] text-[#8b949e]">
+                  React and React DOM are always included. Choose only extra npm dependencies here; the same packages can also be installed later from the Packages panel.
                 </div>
                 
                 {/* Tech Badges Grid */}
@@ -148,7 +147,7 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
                         onClick={() => handleToggleTech(tech.id)}
                         className={`group p-3 rounded border flex items-start gap-2.5 cursor-pointer transition select-none ${
                           isSelected
-                            ? 'bg-[#1f242c] border-[#58a6ff]/60'
+                            ? 'bg-[#1f242c] border-[#c084fc]/60'
                             : 'bg-[#161b22] border-[#30363d] hover:border-[#8b949e]'
                         }`}
                       >
@@ -163,14 +162,12 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
                         
                         <div>
                           <div className="flex items-center gap-1.5">
-                            <span className={`text-xs font-bold transition-colors ${isSelected ? 'text-[#58a6ff]' : 'text-[#c9d1d9]'}`}>
+                            <span className={`text-xs font-bold transition-colors ${isSelected ? 'text-[#c084fc]' : 'text-[#c9d1d9]'}`}>
                               {tech.label}
                             </span>
-                            {tech.id === 'React' && (
-                              <span className="text-[8px] bg-blue-500/10 text-blue-400 font-mono px-1 py-0.2 rounded border border-blue-500/20">
-                                Required
-                              </span>
-                            )}
+                            <span className="text-[8px] bg-purple-500/10 text-purple-400 font-mono px-1 py-0.2 rounded border border-purple-400/20">
+                              {tech.group}
+                            </span>
                           </div>
                           <p className="text-[10px] text-[#8b949e] mt-0.5 line-clamp-1 leading-relaxed">
                             {tech.desc}
@@ -187,7 +184,7 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
             {/* Modal Footer Controls */}
             <div className="px-6 py-3 border-t border-[#30363d] bg-[#161b22] flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-[10px] text-[#8b949e] font-mono">
-                <Sparkles size={11} className="text-[#58a6ff]" />
+                <Sparkles size={11} className="text-[#c084fc]" />
                 <span>Save state locally</span>
               </div>
               <div className="flex items-center gap-2">
@@ -214,3 +211,4 @@ export default function NewProjectModal({ isOpen, onClose, onCreate }: NewProjec
     </AnimatePresence>
   );
 }
+

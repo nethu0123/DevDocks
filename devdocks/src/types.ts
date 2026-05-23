@@ -38,6 +38,8 @@ export interface TerminalSession {
 
 export interface Project {
   id: string;
+  ownerId?: string;
+  ownerEmail?: string;
   name: string;
   description: string;
   techStack: string[];
@@ -52,9 +54,17 @@ export interface Project {
   lastEdited: string;
 }
 
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: string;
+}
+
 export type SidebarPanel = 'explorer' | 'extensions' | 'packages' | 'terminal' | 'recycle' | 'profile' | null;
 
 export interface AppState {
+  currentUser: AuthUser | null;
   projects: Record<string, Project>;
   activeProjectId: string | null; // null means we are on Dashboard/Landing
   currentView: 'landing' | 'dashboard' | 'ide';
@@ -74,3 +84,4 @@ export interface AppState {
   editorWidth: number; // in percent (e.g. 50)
   terminalHeight: number; // in pixels (e.g. 200)
 }
+

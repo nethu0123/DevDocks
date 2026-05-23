@@ -1,14 +1,17 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Terminal, Bot, Sparkles, Code2, ArrowRight, ShieldCheck, Zap } from 'lucide-react';
+import { Terminal, Bot, Sparkles, Code2, ArrowRight, ShieldCheck, Zap, LogOut } from 'lucide-react';
+import { AuthUser } from '../types';
 
 interface LandingPageProps {
   onGetStarted: () => void;
-  theme?: 'dark' | 'light';
-  onThemeToggle?: () => void;
+  currentUser: AuthUser;
+  onSignOut: () => void;
 }
 
-export default function LandingPage({ onGetStarted, theme = 'dark', onThemeToggle }: LandingPageProps) {
+export default function LandingPage({ onGetStarted, currentUser, onSignOut }: LandingPageProps) {
+  const theme: 'dark' | 'light' = 'dark';
+
   return (
     <div className={`relative min-h-screen flex flex-col justify-between overflow-hidden font-sans transition-colors duration-200 ${
       theme === 'dark' ? 'bg-[#0d1117] text-[#c9d1d9]' : 'bg-white text-slate-900'
@@ -22,7 +25,7 @@ export default function LandingPage({ onGetStarted, theme = 'dark', onThemeToggl
         }} className="absolute inset-0 opacity-30" />
         
         {/* Subtle, structured geometric highlights */}
-        <div className="absolute -top-[10%] -left-[10%] w-[50%] h-[50%] rounded-full bg-blue-500/5 blur-[120px] animate-pulse" style={{ animationDuration: '10s' }} />
+        <div className="absolute -top-[10%] -left-[10%] w-[50%] h-[50%] rounded-full bg-purple-500/5 blur-[120px] animate-pulse" style={{ animationDuration: '10s' }} />
         <div className="absolute top-[40%] -right-[10%] w-[45%] h-[45%] rounded-full bg-slate-500/5 blur-[130px] animate-pulse" style={{ animationDuration: '12s' }} />
       </div>
 
@@ -48,7 +51,7 @@ export default function LandingPage({ onGetStarted, theme = 'dark', onThemeToggl
         theme === 'dark' ? 'border-[#30363d] bg-[#161b22]/90' : 'border-slate-200 bg-slate-50/90'
       }`}>
         <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-md bg-blue-600 flex items-center justify-center shadow-md">
+          <div className="h-8 w-8 rounded-md bg-purple-600 flex items-center justify-center shadow-md">
             <span className="text-white text-[11px] font-black">DD</span>
           </div>
           <span className={`font-sans text-sm font-bold tracking-tight transition-colors ${
@@ -57,27 +60,26 @@ export default function LandingPage({ onGetStarted, theme = 'dark', onThemeToggl
             DevDocks
           </span>
         </div>
-        <div className={`flex items-center gap-3 text-xs font-mono px-3 py-1.5 rounded-md border transition-colors ${
+        <div className="flex items-center gap-3">
+        <div className={`hidden sm:flex items-center gap-3 text-xs font-mono px-3 py-1.5 rounded-md border transition-colors ${
           theme === 'dark'
             ? 'border-[#30363d] text-[#8b949e] bg-[#0d1117]'
             : 'border-slate-200 text-slate-600 bg-slate-100'
         }`}>
+          <span>{currentUser.name}</span>
+          <span className="h-3 w-px bg-[#30363d]"></span>
           <span>v1.0.0 Stable</span>
           <span className="h-2 w-2 rounded-full bg-[#238636] animate-pulse"></span>
           <span>Web Sandbox</span>
         </div>
-        {onThemeToggle && (
-          <button
-            onClick={onThemeToggle}
-            className={`h-8 px-3 rounded text-[11px] font-mono border cursor-pointer transition ${
-              theme === 'dark'
-                ? 'bg-[#161b22] border-[#30363d] text-[#8b949e] hover:text-white hover:bg-[#1f242c]'
-                : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-            }`}
-          >
-            {theme === 'dark' ? 'light' : 'dark'}
-          </button>
-        )}
+        <button
+          onClick={onSignOut}
+          className="h-8 w-8 rounded border border-[#30363d] bg-[#161b22] text-[#8b949e] hover:text-white hover:bg-[#1f242c] hover:border-[#c084fc]/60 transition flex items-center justify-center"
+          title="Sign out"
+        >
+          <LogOut size={14} />
+        </button>
+        </div>
       </header>
 
       {/* Main Focus Hero Section */}
@@ -91,11 +93,11 @@ export default function LandingPage({ onGetStarted, theme = 'dark', onThemeToggl
             transition={{ duration: 0.5 }}
             className={`inline-flex items-center gap-2 px-3 py-1 border text-xs font-mono tracking-wider mb-8 rounded transition-colors ${
               theme === 'dark'
-                ? 'bg-[#161b22] border-[#30363d] text-[#58a6ff]'
-                : 'bg-blue-50 border-blue-200 text-blue-600'
+                ? 'bg-[#161b22] border-[#30363d] text-[#c084fc]'
+                : 'bg-purple-500/10 border-purple-500/30 text-purple-400'
             }`}
           >
-            <Sparkles size={12} className={theme === 'dark' ? 'text-[#58a6ff]' : 'text-blue-600'} />
+            <Sparkles size={12} className={theme === 'dark' ? 'text-[#c084fc]' : 'text-purple-400'} />
             <span>GEOMETRIC BALANCE INSPIRED IDE</span>
           </motion.div>
 
@@ -108,7 +110,7 @@ export default function LandingPage({ onGetStarted, theme = 'dark', onThemeToggl
               theme === 'dark' ? 'text-white' : 'text-slate-900'
             }`}
           >
-            Browser coding. <span className={theme === 'dark' ? 'text-[#58a6ff]' : 'text-blue-600'}>Re-imagined.</span>
+            Browser coding. <span className={theme === 'dark' ? 'text-[#c084fc]' : 'text-purple-400'}>Re-imagined.</span>
           </motion.h1>
 
           {/* Description Subtitle */}

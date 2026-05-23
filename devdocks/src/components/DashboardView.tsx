@@ -3,9 +3,10 @@ import { motion } from 'motion/react';
 import { 
   Plus, Search, FolderCode, Calendar, ShieldAlert,
   ArrowUpRight, Trash2, Edit3, Check, X, RefreshCw, Sparkles, FolderUp, RotateCcw,
-  ArrowLeft
+  ArrowLeft, LogOut
 } from 'lucide-react';
-import { Project } from '../types';
+import { AuthUser, Project } from '../types';
+import ConfirmDialog from './ConfirmDialog';
 
 interface DashboardViewProps {
   projects: Record<string, Project>;
@@ -13,9 +14,9 @@ interface DashboardViewProps {
   onOpenProject: (id: string) => void;
   onRenameProject: (id: string, newName: string) => void;
   onDeleteProject: (id: string) => void;
-  theme: 'dark' | 'light';
-  onThemeToggle: () => void;
   onBackToHome: () => void;
+  currentUser: AuthUser;
+  onSignOut: () => void;
 }
 
 export default function DashboardView({
@@ -24,21 +25,36 @@ export default function DashboardView({
   onOpenProject,
   onRenameProject,
   onDeleteProject,
-  theme,
-  onThemeToggle,
-  onBackToHome
+  onBackToHome,
+  currentUser,
+  onSignOut
 }: DashboardViewProps) {
+  const theme: 'dark' | 'light' = 'dark';
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [localRecycledProjects, setLocalRecycledProjects] = useState<any[]>([]);
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    danger?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
 
   // Load deleted projects from local storage registry
   useEffect(() => {
     const loadRecycled = () => {
       try {
         const bin = JSON.parse(localStorage.getItem('devdocks_dashboard_recycle_projects') || '[]');
-        setLocalRecycledProjects(bin);
+        setLocalRecycledProjects(bin.filter((item: any) => {
+          try {
+            const project = JSON.parse(item.content || '{}');
+            return project.ownerId === currentUser.id && project.ownerEmail === currentUser.email;
+          } catch {
+            return false;
+          }
+        }));
       } catch (e) {
         console.error(e);
       }
@@ -82,7 +98,12 @@ export default function DashboardView({
   };
 
   const handlePermDeleteProject = (itemId: string) => {
-    if (confirm('Are you sure you want to delete this project forever? This cannot be undone.')) {
+    setConfirmState({
+      title: 'Delete forever?',
+      message: 'Are you sure you want to delete this project forever? This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => {
       try {
         const bin = JSON.parse(localStorage.getItem('devdocks_dashboard_recycle_projects') || '[]');
         const filtered = bin.filter((x: any) => x.id !== itemId);
@@ -91,7 +112,8 @@ export default function DashboardView({
       } catch (e) {
         console.error(e);
       }
-    }
+      }
+    });
   };
 
   const startRenameInput = (e: React.MouseEvent, id: string, name: string) => {
@@ -110,7 +132,12 @@ export default function DashboardView({
 
   const triggerDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation(); // Avoid trigger load
-    if (confirm('Move project to Recycle Bin? You can restore it later.')) {
+    setConfirmState({
+      title: 'Move project to Recycle Bin?',
+      message: 'You can restore it later from the workspace recycle bin.',
+      confirmLabel: 'Move',
+      danger: true,
+      onConfirm: () => {
       onDeleteProject(id);
       setTimeout(() => {
         // Query update
@@ -119,7 +146,8 @@ export default function DashboardView({
           setLocalRecycledProjects(bin);
         } catch (err) {}
       }, 500);
-    }
+      }
+    });
   };
 
   const projectList = Object.values(projects);
@@ -132,6 +160,18 @@ export default function DashboardView({
     <div className={`min-h-screen transition-colors duration-200 ${
       theme === 'dark' ? 'bg-[#0d1117] text-[#c9d1d9]' : 'bg-slate-50 text-slate-800'
     } flex flex-col font-sans`}>
+      <ConfirmDialog
+        open={Boolean(confirmState)}
+        title={confirmState?.title || ''}
+        message={confirmState?.message || ''}
+        confirmLabel={confirmState?.confirmLabel}
+        danger={confirmState?.danger}
+        onCancel={() => setConfirmState(null)}
+        onConfirm={() => {
+          confirmState?.onConfirm();
+          setConfirmState(null);
+        }}
+      />
       
       {/* Upper Navigation Row */}
       <nav className={`w-full border-b transition-colors px-6 h-14 flex items-center justify-between ${
@@ -143,30 +183,23 @@ export default function DashboardView({
             title="Back to Homepage"
             className={`p-1.5 rounded border flex items-center justify-center transition-all cursor-pointer ${
               theme === 'dark'
-                ? 'bg-[#1f242c] border-[#30363d] text-[#8b949e] hover:text-white hover:border-[#58a6ff]'
+                ? 'bg-[#1f242c] border-[#30363d] text-[#8b949e] hover:text-white hover:border-[#c084fc]'
                 : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900 hover:border-slate-400 shadow-sm'
             }`}
           >
             <ArrowLeft size={14} className="stroke-[2.5]" />
           </button>
 
-          <div className="h-8 w-8 rounded bg-blue-600 flex items-center justify-center shadow-md">
+          <div className="h-8 w-8 rounded bg-purple-600 flex items-center justify-center shadow-md">
             <span className="text-white text-[11px] font-black">DD</span>
           </div>
           <span className="font-sans font-bold text-sm tracking-tight text-white dark:text-white">DevDocks IDE</span>
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={onThemeToggle}
-            className={`h-8 px-3 rounded text-[11px] font-mono border cursor-pointer transition ${
-              theme === 'dark'
-                ? 'bg-[#161b22] border-[#30363d] text-[#8b949e] hover:text-white hover:bg-[#1f242c]'
-                : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-            }`}
-          >
-            {theme === 'dark' ? 'light' : 'dark'}
-          </button>
+          <span className="hidden sm:inline text-[11px] font-mono text-[#8b949e]">
+            {currentUser.name}
+          </span>
           
           <button
             onClick={onCreateProjectClick}
@@ -174,6 +207,14 @@ export default function DashboardView({
           >
             <Plus size={13} strokeWidth={2.5} />
             <span>CREATE WORKSPACE</span>
+          </button>
+
+          <button
+            onClick={onSignOut}
+            className="h-8 w-8 rounded border border-[#30363d] bg-[#161b22] text-[#8b949e] hover:text-white hover:bg-[#1f242c] flex items-center justify-center transition cursor-pointer"
+            title="Sign out"
+          >
+            <LogOut size={13} />
           </button>
         </div>
       </nav>
@@ -200,8 +241,8 @@ export default function DashboardView({
               onChange={(e) => setSearchQuery(e.target.value)}
               className={`w-full h-8.5 pl-8 pr-4 rounded text-xs outline-none transition border ${
                 theme === 'dark'
-                  ? 'bg-[#161b22] border-[#30363d] text-[#c9d1d9] focus:border-[#58a6ff] placeholder-[#8b949e]'
-                  : 'bg-white border-slate-200 text-slate-700 focus:border-blue-500 placeholder-slate-400'
+                  ? 'bg-[#161b22] border-[#30363d] text-[#c9d1d9] focus:border-[#c084fc] placeholder-[#8b949e]'
+                  : 'bg-white border-slate-200 text-slate-700 focus:border-purple-400 placeholder-slate-400'
               }`}
             />
           </div>
@@ -217,8 +258,8 @@ export default function DashboardView({
               theme === 'dark' ? 'bg-[#161b22] border-[#30363d]' : 'bg-white border-slate-200 shadow-sm'
             }`}
           >
-            <div className={`h-12 w-12 rounded flex items-center justify-center text-[#58a6ff] border ${
-              theme === 'dark' ? 'bg-[#0d1117] border-[#30363d]' : 'bg-blue-50 border-blue-100'
+            <div className={`h-12 w-12 rounded flex items-center justify-center text-[#c084fc] border ${
+              theme === 'dark' ? 'bg-[#0d1117] border-[#30363d]' : 'bg-purple-500/10 border-purple-500/20'
             }`}>
               <FolderCode size={22} className="animate-pulse" />
             </div>
@@ -251,7 +292,7 @@ export default function DashboardView({
                   onClick={() => onOpenProject(project.id)}
                   className={`group relative rounded border flex flex-col justify-between p-5 shadow-sm transition-all duration-150 cursor-pointer overflow-hidden ${
                     theme === 'dark'
-                      ? 'bg-[#161b22] border-[#30363d] hover:border-[#58a6ff]'
+                      ? 'bg-[#161b22] border-[#30363d] hover:border-[#c084fc]'
                       : 'bg-white border-slate-200 hover:border-slate-300'
                   }`}
                 >
@@ -290,10 +331,10 @@ export default function DashboardView({
                           </form>
                         ) : (
                           <div className="flex items-center gap-1">
-                            <h3 className="font-bold text-white dark:text-white group-hover:text-[#58a6ff] text-sm transition-colors">
+                            <h3 className="font-bold text-white dark:text-white group-hover:text-[#c084fc] text-sm transition-colors">
                               {project.name}
                             </h3>
-                            <ArrowUpRight size={12} className="text-[#8b949e] group-hover:text-[#58a6ff] transition-colors" />
+                            <ArrowUpRight size={12} className="text-[#8b949e] group-hover:text-[#c084fc] transition-colors" />
                           </div>
                         )}
                       </div>
@@ -392,7 +433,7 @@ export default function DashboardView({
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => handleRestoreProject(item.id)}
-                      className="px-2 py-0.5 text-[#58a6ff] bg-[#58a6ff]/5 hover:bg-[#58a6ff]/15 rounded border border-[#58a6ff]/20 text-[10px] font-mono transition cursor-pointer"
+                      className="px-2 py-0.5 text-[#c084fc] bg-[#c084fc]/5 hover:bg-[#c084fc]/15 rounded border border-[#c084fc]/20 text-[10px] font-mono transition cursor-pointer"
                     >
                       Restore
                     </button>
@@ -413,3 +454,4 @@ export default function DashboardView({
     </div>
   );
 }
+

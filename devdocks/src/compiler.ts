@@ -84,7 +84,7 @@ function resolveImportCandidate(specifier: string, currentPath: string): string 
 }
 
 function toSandboxSpecifier(absolutePath: string): string {
-  return `#devdocks${absolutePath}`;
+  return `devdocks${absolutePath}`;
 }
 
 function resolveSandboxImport(specifier: string, currentPath: string, availableSpecifiers: Set<string>): string {
@@ -403,6 +403,46 @@ function shouldParseJavaScriptAsJsx(filepath: string, code: string): boolean {
   return /<[A-Z][A-Za-z0-9]*(\s|>|\/>)/.test(code) || /<([a-z]+)(\s[^>]*)?>[\s\S]*<\/\1>/.test(code);
 }
 
+function explainSandboxError(message: string): string {
+  if (message.includes("Cannot read properties of undefined (reading 'transform')")) {
+    return 'The preview compiler could not load the TypeScript transformer correctly. Refresh the workspace and run again. If this started after adding a dependency, remove that package and retry.';
+  }
+
+  if (/Unexpected token/i.test(message)) {
+    return `${message}\nCheck for a missing bracket, quote, comma, or JSX closing tag near the edited line.`;
+  }
+
+  if (/Cannot find module|Failed to resolve module|Import.*not/i.test(message)) {
+    return `${message}\nCheck that the imported file exists and that local imports start with ./ or ../.`;
+  }
+
+  return message;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function mountEntryScript(html: string, entryUrl: string): string {
+  const moduleBootScript = `<script type="module">import ${JSON.stringify(entryUrl)};</script>`;
+  const entryScriptPattern = /<script\b(?=[^>]*\btype=(["'])module\1)(?=[^>]*\bsrc=(["'])(?:\.?\/)?src\/main\.(?:t|j)sx?\2)[^>]*>\s*<\/script>/i;
+
+  if (entryScriptPattern.test(html)) {
+    return html.replace(entryScriptPattern, moduleBootScript);
+  }
+
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${moduleBootScript}</body>`);
+  }
+
+  return `${html}${moduleBootScript}`;
+}
+
 /**
  * Transpiles JSX/TSX/TS files to JavaScript in the browser.
  */
@@ -434,12 +474,16 @@ export function transpileCode(code: string, filepath: string): string {
     const blockingDiagnostic = result.diagnostics?.find((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error);
     if (blockingDiagnostic) {
       const message = ts.flattenDiagnosticMessageText(blockingDiagnostic.messageText, '\n');
-      throw new Error(message);
+      const position = blockingDiagnostic.file && blockingDiagnostic.start !== undefined
+        ? blockingDiagnostic.file.getLineAndCharacterOfPosition(blockingDiagnostic.start)
+        : null;
+      const location = position ? ` at line ${position.line + 1}, column ${position.character + 1}` : '';
+      throw new Error(`${message}${location}`);
     }
 
     return result.outputText;
   } catch (err: any) {
-    throw new Error(`Compile Error in "${filepath}": ${err.message}`);
+    throw new Error(`Compile error in ${filepath}: ${explainSandboxError(err.message)}`);
   }
 }
 
@@ -542,6 +586,23 @@ export function compileWorkspaceSandbox(
       "axios": "https://esm.sh/axios@1.6.8",
       "react-router-dom": "https://esm.sh/react-router-dom@6.22.3?deps=react@19.0.1,react-dom@19.0.1",
       "lucide-react": "https://esm.sh/lucide-react@0.354.0?deps=react@19.0.1",
+      "@tanstack/react-query": "https://esm.sh/@tanstack/react-query@5?deps=react@19.0.1",
+      "@tanstack/react-table": "https://esm.sh/@tanstack/react-table@8?deps=react@19.0.1",
+      "react-hook-form": "https://esm.sh/react-hook-form@7?deps=react@19.0.1",
+      "zod": "https://esm.sh/zod@4",
+      "clsx": "https://esm.sh/clsx@2",
+      "tailwind-merge": "https://esm.sh/tailwind-merge@3",
+      "lodash-es": "https://esm.sh/lodash-es@4",
+      "date-fns": "https://esm.sh/date-fns@4",
+      "dayjs": "https://esm.sh/dayjs@1",
+      "uuid": "https://esm.sh/uuid@11",
+      "nanoid": "https://esm.sh/nanoid@5",
+      "immer": "https://esm.sh/immer@10",
+      "three": "https://esm.sh/three@0.180.0",
+      "@react-three/fiber": "https://esm.sh/@react-three/fiber@9?deps=react@19.0.1,react-dom@19.0.1,three@0.180.0",
+      "canvas-confetti": "https://esm.sh/canvas-confetti@1",
+      "sonner": "https://esm.sh/sonner@2?deps=react@19.0.1,react-dom@19.0.1",
+      "recharts": "https://esm.sh/recharts@3?deps=react@19.0.1,react-dom@19.0.1",
     };
 
     registerNodePolyfills(importsMap, blobUrlsToRevoke, project);
@@ -628,12 +689,10 @@ export function compileWorkspaceSandbox(
 
     // Replace the main.tsx entry point script with its mapped blob URL if script source loads relative to workspace
     // E.g. </body > ... <script src="/src/main.tsx"> -> source mapped url
-    const mainPath = Object.keys(mapEntries).find(key => key.endsWith('main') || key.endsWith('main.tsx'));
+    const mainPath = Object.keys(mapEntries).find(key => /\/src\/main\.(t|j)sx?$/.test(key));
     if (mainPath && mapEntries[mainPath]) {
       const targetBlob = mapEntries[mainPath];
-      // Regex replace to swap static references with raw blobUrls
-      finalHtml = finalHtml.replace(/src="\/src\/main\.[t|j]sx?"/g, `src="${targetBlob}"`);
-      finalHtml = finalHtml.replace(/src="\.\/src\/main\.[t|j]sx?"/g, `src="${targetBlob}"`);
+      finalHtml = mountEntryScript(finalHtml, targetBlob);
     }
 
     return {
@@ -642,15 +701,18 @@ export function compileWorkspaceSandbox(
       error: null,
     };
   } catch (err: any) {
+    const friendlyMessage = explainSandboxError(err.message);
+
     return {
       html: `
-        <div style="background:#1e1e24; color:#ff6b6b; padding:1.5rem; font-family:monospace; border-radius:8px; border-left:4px solid #f00;">
-          <h3 style="margin-top:0;">⚠️ Compilation Failed</h3>
-          <p>${err.message}</p>
+        <div style="background:#1e1e24; color:#ffb3ad; padding:1.5rem; font-family:Inter,system-ui,sans-serif; border-radius:8px; border-left:4px solid #ff7b72; line-height:1.5;">
+          <h3 style="margin-top:0; color:#fff;">Compilation failed</h3>
+          <p style="white-space:pre-wrap;">${escapeHtml(friendlyMessage)}</p>
         </div>
       `,
       blobUrls: blobUrlsToRevoke,
-      error: err.message,
+      error: friendlyMessage,
     };
   }
 }
+

@@ -1,7 +1,16 @@
 import { create } from 'zustand';
-import { Project, FileNode, RecycleBinItem, HistoryLog, TerminalLog, TerminalSession, SidebarPanel, AppState } from './types';
+import { Project, FileNode, RecycleBinItem, HistoryLog, TerminalLog, TerminalSession, SidebarPanel, AppState, AuthUser } from './types';
+
+type AuthRecord = AuthUser & {
+  passwordHash: string;
+};
 
 interface AppStore extends AppState {
+  // Authentication actions
+  signUp: (name: string, email: string, password: string) => { ok: boolean; message?: string };
+  signIn: (email: string, password: string) => { ok: boolean; message?: string };
+  signOut: () => void;
+
   // Navigation actions
   setCurrentView: (view: 'landing' | 'dashboard' | 'ide') => void;
   setActiveProject: (projectId: string | null) => void;
@@ -177,11 +186,11 @@ export default function App() {
         
         {/* Header Hero */}
         <div className="flex items-center gap-4 mb-6">
-          <div className="h-12 w-12 rounded-xl bg-gradient-to-tr from-cyan-400 to-blue-500 flex items-center justify-center text-slate-950 font-bold shadow-lg">
+          <div className="h-12 w-12 rounded-xl bg-gradient-to-tr from-purple-400 to-purple-600 flex items-center justify-center text-slate-950 font-bold shadow-lg">
             ${hasLucide ? '<Flame className="h-6 w-6 text-slate-950" />' : 'DD'}
           </div>
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
+            <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-purple-300 to-purple-500 bg-clip-text text-transparent">
               ${name}
             </h1>
             <p className="text-sm text-slate-400">Successfully running in browser sandboxed sandbox preview!</p>
@@ -198,7 +207,7 @@ export default function App() {
           <div className="flex flex-wrap gap-2">
             ${techStack.map(stack => `
             <span key="${stack}" className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium bg-slate-700/50 text-slate-200 border border-slate-600/30">
-              <span className="h-1.5 w-1.5 rounded-full bg-cyan-400"></span>
+              <span className="h-1.5 w-1.5 rounded-full bg-purple-400"></span>
               ${stack}
             </span>`).join('')}
           </div>
@@ -218,7 +227,7 @@ export default function App() {
               >
                 -
               </button>
-              <span className="w-10 text-center font-mono text-lg text-cyan-400 font-semibold bg-slate-950/80 py-1 rounded">
+              <span className="w-10 text-center font-mono text-lg text-purple-400 font-semibold bg-slate-950/80 py-1 rounded">
                 {count}
               </span>
               <button 
@@ -237,7 +246,7 @@ export default function App() {
             ${hasLucide ? '<Terminal className="h-3.5 w-3.5" />' : '<span>⌨</span>'}
             <span>Interactive Run Mode</span>
           </div>
-          <div className="flex items-center gap-1.5 text-cyan-500/80">
+          <div className="flex items-center gap-1.5 text-purple-400/80">
             ${hasLucide ? '<Sparkles className="h-3.5 w-3.5" />' : '<span>✨</span>'}
             <span>DevDocks Sandbox Runner</span>
           </div>
@@ -281,11 +290,34 @@ if (rootElement) {
 
 // Load initial state from local storage securely
 const STORAGE_KEY = 'devdocks_workspace_state_v1';
+const AUTH_STORAGE_KEY = 'devdocks_auth_users_v1';
 const DEFAULT_TERMINAL_SESSION: TerminalSession = {
   id: 'terminal_1',
   name: 'powershell',
   cwd: 'root',
   createdAt: new Date().toLocaleTimeString()
+};
+
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+const hashPassword = (password: string) => {
+  try {
+    return btoa(unescape(encodeURIComponent(`devdocks:${password}`)));
+  } catch {
+    return password;
+  }
+};
+
+const loadAuthRecords = (): Record<string, AuthRecord> => {
+  try {
+    return JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || '{}');
+  } catch {
+    return {};
+  }
+};
+
+const saveAuthRecords = (records: Record<string, AuthRecord>) => {
+  localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(records));
 };
 
 const loadPersistedState = (): Partial<AppState> => {
@@ -301,10 +333,11 @@ const loadPersistedState = (): Partial<AppState> => {
 
       // Ensure structures are loaded correctly
       return {
+        currentUser: parsed.currentUser || null,
         projects: parsed.projects || {},
         activeProjectId: parsed.activeProjectId || null,
         currentView: parsed.currentView || 'landing',
-        theme: parsed.theme || 'dark',
+        theme: 'dark',
         sidebarPanel: parsed.sidebarPanel || 'explorer',
         terminalOpen: parsed.terminalOpen !== undefined ? parsed.terminalOpen : false,
         previewOpen: parsed.previewOpen !== undefined ? parsed.previewOpen : true,
@@ -329,7 +362,12 @@ const loadPersistedState = (): Partial<AppState> => {
   return {};
 };
 
-const saveStateToLocalStorage = (state: Partial<AppState>) => {
+const projectBelongsToUser = (project: Project | undefined, user: AuthUser | null) => {
+  if (!project || !user) return false;
+  return project.ownerId === user.id && project.ownerEmail === user.email;
+};
+
+const saveStateToLocalStorage = (state: Partial<AppState> & { unsavedDrafts?: Record<string, string> }) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
@@ -339,6 +377,7 @@ const saveStateToLocalStorage = (state: Partial<AppState>) => {
 
 export const useStore = create<AppStore>((set, get) => ({
   // Core default status
+  currentUser: null,
   projects: {},
   activeProjectId: null,
   currentView: 'landing',
@@ -369,6 +408,58 @@ export const useStore = create<AppStore>((set, get) => ({
 
   ...loadPersistedState(),
 
+  // Authentication handlers
+  signUp: (name, email, password) => {
+    const cleanName = name.trim();
+    const cleanEmail = normalizeEmail(email);
+
+    if (!cleanName) return { ok: false, message: 'Please enter your name.' };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) return { ok: false, message: 'Please enter a valid email address.' };
+    if (password.length < 6) return { ok: false, message: 'Password must be at least 6 characters.' };
+
+    const records = loadAuthRecords();
+    if (records[cleanEmail]) return { ok: false, message: 'An account already exists for this email. Please log in.' };
+
+    const user: AuthUser = {
+      id: 'user_' + Math.random().toString(36).substring(2, 11),
+      name: cleanName,
+      email: cleanEmail,
+      createdAt: new Date().toLocaleString()
+    };
+
+    records[cleanEmail] = { ...user, passwordHash: hashPassword(password) };
+    saveAuthRecords(records);
+    set({ currentUser: user, activeProjectId: null, currentView: 'landing', unsavedDrafts: {}, theme: 'dark' });
+    saveStateToLocalStorage({ ...get(), currentUser: user, activeProjectId: null, currentView: 'landing', unsavedDrafts: {}, theme: 'dark' });
+    return { ok: true };
+  },
+
+  signIn: (email, password) => {
+    const cleanEmail = normalizeEmail(email);
+    const records = loadAuthRecords();
+    const found = records[cleanEmail];
+
+    if (!found || found.passwordHash !== hashPassword(password)) {
+      return { ok: false, message: 'Email or password is incorrect. Please check and try again.' };
+    }
+
+    const user: AuthUser = {
+      id: found.id,
+      name: found.name,
+      email: found.email,
+      createdAt: found.createdAt
+    };
+
+    set({ currentUser: user, activeProjectId: null, currentView: 'landing', unsavedDrafts: {}, theme: 'dark' });
+    saveStateToLocalStorage({ ...get(), currentUser: user, activeProjectId: null, currentView: 'landing', unsavedDrafts: {}, theme: 'dark' });
+    return { ok: true };
+  },
+
+  signOut: () => {
+    set({ currentUser: null, activeProjectId: null, currentView: 'landing', theme: 'dark' });
+    saveStateToLocalStorage({ ...get(), currentUser: null, activeProjectId: null, currentView: 'landing', theme: 'dark' });
+  },
+
   // Navigation handlers
   setCurrentView: (view) => {
     set({ currentView: view });
@@ -380,6 +471,17 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   setActiveProject: (projectId) => {
+    if (projectId && !projectBelongsToUser(get().projects[projectId], get().currentUser)) {
+      set({ activeProjectId: null, currentView: 'dashboard', unsavedDrafts: {} });
+      saveStateToLocalStorage({
+        ...get(),
+        activeProjectId: null,
+        currentView: 'dashboard',
+        unsavedDrafts: {}
+      });
+      return;
+    }
+
     set({ activeProjectId: projectId });
     if (projectId) {
       const proj = get().projects[projectId];
@@ -399,20 +501,15 @@ export const useStore = create<AppStore>((set, get) => ({
     }
   },
 
-  setTheme: (theme) => {
-    set({ theme });
-    // Update body Class name for tailwind style switching
+  setTheme: () => {
+    set({ theme: 'dark' });
+    // DevDocks is dark-only. Keep old persisted light settings from resurfacing.
     const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-      root.classList.remove('light');
-    } else {
-      root.classList.add('light');
-      root.classList.remove('dark');
-    }
+    root.classList.add('dark');
+    root.classList.remove('light');
     saveStateToLocalStorage({
       ...get(),
-      theme
+      theme: 'dark'
     });
   },
 
@@ -450,6 +547,8 @@ export const useStore = create<AppStore>((set, get) => ({
 
   // Projects CRUD
   createProject: (name, description, techStack) => {
+    const ownerId = get().currentUser?.id;
+    const ownerEmail = get().currentUser?.email;
     const id = 'proj_' + Math.random().toString(36).substring(2, 11);
     const dateStr = new Date().toLocaleString();
     
@@ -463,8 +562,7 @@ export const useStore = create<AppStore>((set, get) => ({
     if (techStack.includes('React Router')) starterPackages.push('react-router-dom');
     if (techStack.includes('Lucide React')) starterPackages.push('lucide-react');
 
-    const starterExtensions: string[] = [];
-    if (techStack.includes('React')) starterExtensions.push('React Snippets');
+    const starterExtensions: string[] = ['React Snippets'];
     if (techStack.includes('Tailwind CSS')) starterExtensions.push('Tailwind IntelliSense');
     if (techStack.includes('TypeScript')) starterExtensions.push('TypeScript Tools');
     starterExtensions.push('Prettier', 'ESLint');
@@ -482,6 +580,8 @@ export const useStore = create<AppStore>((set, get) => ({
 
     const newProject: Project = {
       id,
+      ownerId,
+      ownerEmail,
       name,
       description,
       techStack,
@@ -512,7 +612,7 @@ export const useStore = create<AppStore>((set, get) => ({
   renameProject: (projectId, newName) => {
     set((state) => {
       const proj = state.projects[projectId];
-      if (!proj) return {};
+      if (!projectBelongsToUser(proj, state.currentUser)) return {};
       
       const updatedProj: Project = {
         ...proj,
@@ -541,7 +641,7 @@ export const useStore = create<AppStore>((set, get) => ({
   deleteProject: (projectId) => {
     set((state) => {
       const proj = state.projects[projectId];
-      if (!proj) return {};
+      if (!projectBelongsToUser(proj, state.currentUser)) return {};
 
       // Prepare Recycle bin item containing full project JSON payload!
       const trashItem: RecycleBinItem = {
@@ -585,6 +685,7 @@ export const useStore = create<AppStore>((set, get) => ({
       if (foundIdx > -1) {
         const trashItem = globalBin[foundIdx];
         const projData = JSON.parse(trashItem.content!) as Project;
+        if (!projectBelongsToUser(projData, get().currentUser)) return;
         
         // Restore
         projData.lastEdited = new Date().toLocaleString();
@@ -626,7 +727,7 @@ export const useStore = create<AppStore>((set, get) => ({
   // Virtual Files CRUD
   createFile: (projectId, path, content) => {
     const proj = get().projects[projectId];
-    if (!proj) return false;
+    if (!projectBelongsToUser(proj, get().currentUser)) return false;
     if (proj.files[path]) return false; // File exists!
 
     set((state) => {
@@ -664,7 +765,7 @@ export const useStore = create<AppStore>((set, get) => ({
 
   createFolder: (projectId, path) => {
     const proj = get().projects[projectId];
-    if (!proj) return false;
+    if (!projectBelongsToUser(proj, get().currentUser)) return false;
     if (proj.files[path]) return false;
 
     set((state) => {
@@ -702,7 +803,7 @@ export const useStore = create<AppStore>((set, get) => ({
 
   renameFileOrFolder: (projectId, oldPath, newPath) => {
     const proj = get().projects[projectId];
-    if (!proj) return false;
+    if (!projectBelongsToUser(proj, get().currentUser)) return false;
     if (proj.files[newPath]) return false;
 
     set((state) => {
@@ -787,7 +888,7 @@ export const useStore = create<AppStore>((set, get) => ({
   deleteFileOrFolder: (projectId, path) => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
 
       const target = currentProj.files[path];
       if (!target) return {};
@@ -874,7 +975,7 @@ export const useStore = create<AppStore>((set, get) => ({
   restoreFileOrFolder: (projectId, itemId) => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
 
       const foundIdx = currentProj.recycleBin.findIndex((item) => item.id === itemId);
       if (foundIdx === -1) return {};
@@ -922,7 +1023,7 @@ export const useStore = create<AppStore>((set, get) => ({
   deletePermanently: (projectId, itemId) => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
 
       const found = currentProj.recycleBin.find((item) => item.id === itemId);
       const updatedRecycle = currentProj.recycleBin.filter((item) => item.id !== itemId);
@@ -970,7 +1071,7 @@ export const useStore = create<AppStore>((set, get) => ({
 
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
 
       const newFiles = { ...currentProj.files };
       Object.entries(state.unsavedDrafts).forEach(([path, content]) => {
@@ -1007,7 +1108,7 @@ export const useStore = create<AppStore>((set, get) => ({
   openTab: (projectId, path) => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
 
       const openTabs = currentProj.openTabs.includes(path)
         ? currentProj.openTabs
@@ -1031,7 +1132,7 @@ export const useStore = create<AppStore>((set, get) => ({
   closeTab: (projectId, path) => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
 
       const openTabs = currentProj.openTabs.filter((t) => t !== path);
       let activeFile = currentProj.activeFile;
@@ -1074,10 +1175,11 @@ export const useStore = create<AppStore>((set, get) => ({
   installPackage: (projectId, packageName, version = 'latest') => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
-      if (currentProj.installedPackages.includes(packageName)) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
+      const cleanPackageName = packageName.trim();
+      if (!cleanPackageName || currentProj.installedPackages.includes(cleanPackageName)) return {};
 
-      const installedPackages = [...currentProj.installedPackages, packageName];
+      const installedPackages = [...currentProj.installedPackages, cleanPackageName];
       
       // Update virtual app package.json dependency values
       const newFiles = { ...currentProj.files };
@@ -1086,12 +1188,18 @@ export const useStore = create<AppStore>((set, get) => ({
         try {
           const parsed = JSON.parse(pkgFile.content);
           parsed.dependencies = parsed.dependencies || {};
-          parsed.dependencies[packageName] = version;
-          pkgFile.content = JSON.stringify(parsed, null, 2);
+          parsed.dependencies[cleanPackageName] = version;
+          newFiles['package.json'] = { ...pkgFile, content: JSON.stringify(parsed, null, 2) };
         } catch (err) {
           console.error(err);
         }
       }
+      newFiles['.devdocks'] = newFiles['.devdocks'] || { path: '.devdocks', content: '', isFolder: true };
+      newFiles['.devdocks/packages.json'] = {
+        path: '.devdocks/packages.json',
+        isFolder: false,
+        content: JSON.stringify({ installedPackages }, null, 2)
+      };
 
       const updatedProj: Project = {
         ...currentProj,
@@ -1104,7 +1212,7 @@ export const useStore = create<AppStore>((set, get) => ({
             id: 'pkg_' + Date.now(),
             timestamp: new Date().toLocaleTimeString(),
             action: 'pkg_install',
-            message: `Installed npm package "${packageName}@${version}"`
+            message: `Installed npm package "${cleanPackageName}@${version}"`
           }
         ]
       };
@@ -1121,7 +1229,7 @@ export const useStore = create<AppStore>((set, get) => ({
   uninstallPackage: (projectId, packageName) => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
 
       const installedPackages = currentProj.installedPackages.filter((p) => p !== packageName);
       
@@ -1133,10 +1241,16 @@ export const useStore = create<AppStore>((set, get) => ({
           if (parsed.dependencies) {
             delete parsed.dependencies[packageName];
           }
-          pkgFile.content = JSON.stringify(parsed, null, 2);
+          newFiles['package.json'] = { ...pkgFile, content: JSON.stringify(parsed, null, 2) };
         } catch (err) {
           console.error(err);
         }
+      }
+      if (newFiles['.devdocks/packages.json']) {
+        newFiles['.devdocks/packages.json'] = {
+          ...newFiles['.devdocks/packages.json'],
+          content: JSON.stringify({ installedPackages }, null, 2)
+        };
       }
 
       const updatedProj: Project = {
@@ -1168,7 +1282,7 @@ export const useStore = create<AppStore>((set, get) => ({
   installExtension: (projectId, extensionId) => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
       if (currentProj.installedExtensions.includes(extensionId)) return {};
 
       const installedExtensions = [...currentProj.installedExtensions, extensionId];
@@ -1207,7 +1321,7 @@ export const useStore = create<AppStore>((set, get) => ({
   uninstallExtension: (projectId, extensionId) => {
     set((state) => {
       const currentProj = state.projects[projectId];
-      if (!currentProj) return {};
+      if (!projectBelongsToUser(currentProj, state.currentUser)) return {};
 
       const installedExtensions = currentProj.installedExtensions.filter((e) => e !== extensionId);
       const newFiles = { ...currentProj.files };
@@ -1244,6 +1358,13 @@ export const useStore = create<AppStore>((set, get) => ({
 
   // Terminal actions
   addTerminalLog: (log) => {
+    if (log.content.includes("Cannot read properties of undefined (reading 'transform')")) {
+      log = {
+        ...log,
+        content: 'Preview compiler issue: the TypeScript transformer was not available. Refresh the workspace and run again. If this began after installing a package, remove that package and retry.'
+      };
+    }
+
     const id = 'log_' + Math.random().toString(36).substring(2, 9);
     const sessionId = log.sessionId || get().activeTerminalSessionId || DEFAULT_TERMINAL_SESSION.id;
     const newLogItem: TerminalLog = {
@@ -1253,6 +1374,11 @@ export const useStore = create<AppStore>((set, get) => ({
       timestamp: new Date().toLocaleTimeString()
     };
     set((state) => {
+      const lastLog = state.terminalLogs[state.terminalLogs.length - 1];
+      if (lastLog && lastLog.type === newLogItem.type && lastLog.content === newLogItem.content) {
+        return {};
+      }
+
       const logs = [...state.terminalLogs, newLogItem].slice(-200); // Limit to last 200 logs
       const updated = {
         ...state,
@@ -2019,3 +2145,4 @@ export const useStore = create<AppStore>((set, get) => ({
   }
 
 }));
+

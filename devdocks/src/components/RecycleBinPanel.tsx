@@ -53,7 +53,7 @@ export default function RecycleBinPanel({
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => onRestore(item.id)}
-                        className="p-1.5 rounded bg-[#0d1117] border border-[#30363d] text-[#58a6ff] hover:text-white hover:bg-[#1f242c] transition cursor-pointer"
+                        className="p-1.5 rounded bg-[#0d1117] border border-[#30363d] text-[#c084fc] hover:text-white hover:bg-[#1f242c] transition cursor-pointer"
                         title="Restore"
                       >
                         <RotateCcw size={10} />
@@ -106,3 +106,4 @@ export default function RecycleBinPanel({
     </div>
   );
 }
+

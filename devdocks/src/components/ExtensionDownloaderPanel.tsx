@@ -132,6 +132,14 @@ export default function ExtensionDownloaderPanel({
   }, [query, project.techStack.join('|'), project.installedPackages.join('|')]).map((ext) => ({ ...ext, source: 'local' as const }));
 
   const filtered: ExtensionResult[] = liveResults.length > 0 ? liveResults : localFiltered;
+  const groupedResults = useMemo(() => {
+    return filtered.reduce<Record<string, ExtensionResult[]>>((groups, ext) => {
+      const key = ext.category || 'Extensions';
+      groups[key] = groups[key] || [];
+      groups[key].push(ext);
+      return groups;
+    }, {});
+  }, [filtered]);
 
   const customQuery = query.trim();
   const canInstallCustom = customQuery.length > 1 && !filtered.some((ext) => ext.id.toLowerCase() === customQuery.toLowerCase() || ext.name.toLowerCase() === customQuery.toLowerCase());
@@ -145,7 +153,7 @@ export default function ExtensionDownloaderPanel({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 min-w-0">
             <span className="text-xs font-bold text-slate-100 truncate">{ext.name}</span>
-            {recommended && <span className="text-[8px] bg-blue-500/10 text-[#58a6ff] px-1.5 rounded border border-blue-500/20 shrink-0">Recommended</span>}
+            {recommended && <span className="text-[8px] bg-purple-500/10 text-[#c084fc] px-1.5 rounded border border-purple-400/20 shrink-0">Recommended</span>}
             {ext.source === 'live' && <span className="text-[8px] bg-emerald-500/10 text-emerald-400 px-1.5 rounded border border-emerald-500/20 shrink-0">Live</span>}
           </div>
           <p className="text-[10px] text-[#8b949e] mt-1 leading-normal">{ext.desc}</p>
@@ -161,7 +169,7 @@ export default function ExtensionDownloaderPanel({
           className={`group h-6 px-2.5 rounded text-[10px] font-bold border flex items-center gap-1 shrink-0 cursor-pointer transition ${
             isInstalled
               ? 'bg-[#0d1117] border-[#30363d] text-[#8b949e] hover:text-[#ff7b72] hover:border-[#ff7b72]/45 hover:bg-red-500/10'
-              : 'bg-[#1f6feb] border-0 text-white hover:bg-[#388bfd]'
+              : 'bg-[#9333ea] border-0 text-white hover:bg-[#a855f7]'
           }`}
         >
           {isInstalled ? (
@@ -192,7 +200,7 @@ export default function ExtensionDownloaderPanel({
             placeholder="Search Extensions Marketplace"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full h-8 pl-8 pr-3 rounded bg-[#0d1117] border border-[#30363d] text-xs text-[#c9d1d9] outline-none focus:border-[#58a6ff] placeholder-[#8b949e]"
+            className="w-full h-8 pl-8 pr-3 rounded bg-[#0d1117] border border-[#30363d] text-xs text-[#c9d1d9] outline-none focus:border-[#c084fc] placeholder-[#8b949e]"
           />
         </div>
         <div className="flex items-center justify-between text-[9px] font-mono text-[#8b949e]">
@@ -207,7 +215,7 @@ export default function ExtensionDownloaderPanel({
           <div className="p-3 rounded border border-[#30363d] bg-[#0d1117] flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <Zap size={12} className="text-[#58a6ff]" />
+                <Zap size={12} className="text-[#c084fc]" />
                 <span className="text-xs font-bold text-white truncate">{customQuery}</span>
               </div>
               <p className="text-[10px] text-[#8b949e] mt-1">Install this marketplace extension by name.</p>
@@ -221,9 +229,20 @@ export default function ExtensionDownloaderPanel({
         {filtered.length === 0 ? (
           <div className="text-center py-6 text-[#8b949e] text-xs">No extensions matching query.</div>
         ) : (
-          filtered.map(renderExtension)
+          <div className="space-y-4">
+            {(Object.entries(groupedResults) as [string, ExtensionResult[]][]).map(([category, extensions]) => (
+              <div key={category} className="space-y-2">
+                <div className="sticky top-0 z-10 flex items-center justify-between bg-[#0d1117]/95 py-1 backdrop-blur">
+                  <span className="text-[9px] uppercase font-mono font-bold tracking-wider text-[#c084fc]">{category}</span>
+                  <span className="text-[9px] font-mono text-[#8b949e]">{extensions.length}</span>
+                </div>
+                {extensions.map(renderExtension)}
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
   );
 }
+

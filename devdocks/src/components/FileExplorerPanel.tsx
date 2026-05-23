@@ -5,6 +5,7 @@ import {
   FileCode2, FileJson, Palette, FileType, Settings
 } from 'lucide-react';
 import { Project, FileNode } from '../types';
+import ConfirmDialog from './ConfirmDialog';
 
 interface FileExplorerPanelProps {
   project: Project;
@@ -42,6 +43,7 @@ export default function FileExplorerPanel({
   const [newItemName, setNewItemName] = useState('');
   const [editingPath, setEditingPath] = useState<string | null>(null);
   const [renamedName, setRenamedName] = useState('');
+  const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null);
 
   const toggleExpand = (dir: string) => {
     setExpandedPaths((prev) => ({ ...prev, [dir]: prev[dir] === false }));
@@ -87,12 +89,12 @@ export default function FileExplorerPanel({
 
   const handleDeleteClick = (e: React.MouseEvent, path: string) => {
     e.stopPropagation();
-    if (confirm(`Move "${path}" to Recycle Bin?`)) onDelete(path);
+    setPendingDeletePath(path);
   };
 
   const fileIcon = (path: string) => {
     const lower = path.toLowerCase();
-    const reactColor = materialIcons ? 'text-[#61dafb]' : 'text-[#58a6ff]';
+    const reactColor = materialIcons ? 'text-[#c084fc]' : 'text-[#c084fc]';
     const scriptColor = materialIcons ? 'text-[#facc15]' : 'text-[#f7df1e]';
     const jsonColor = materialIcons ? 'text-[#f97316]' : 'text-[#f59e0b]';
     const cssColor = materialIcons ? 'text-[#38bdf8]' : 'text-[#38bdf8]';
@@ -162,7 +164,7 @@ export default function FileExplorerPanel({
           onClick={() => entry.isFolder ? toggleExpand(entry.path) : onOpenFile(entry.path)}
           className={`group flex items-center justify-between h-7 py-1 pr-1.5 rounded font-mono text-[11px] cursor-pointer select-none transition ${
             isActive
-              ? 'bg-[#1f242c] text-[#58a6ff] font-semibold border-l-2 border-[#58a6ff]'
+              ? 'bg-[#1f242c] text-[#c084fc] font-semibold border-l-2 border-[#c084fc]'
               : 'text-[#c9d1d9] hover:bg-[#1f242c] hover:text-white'
           }`}
         >
@@ -189,14 +191,14 @@ export default function FileExplorerPanel({
                   type="text"
                   value={renamedName}
                   onChange={(e) => setRenamedName(e.target.value)}
-                  className="bg-[#0d1117] border border-[#58a6ff] text-white px-1 text-[11px] rounded outline-none w-full"
+                  className="bg-[#0d1117] border border-[#c084fc] text-white px-1 text-[11px] rounded outline-none w-full"
                   autoFocus
                 />
               </form>
             ) : (
               <span className="truncate flex items-center gap-1">
                 {entry.name}
-                {hasUnsaved && <span className="h-1.5 w-1.5 rounded-full bg-[#58a6ff] inline-block animate-pulse shrink-0" title="Unsaved changes" />}
+                {hasUnsaved && <span className="h-1.5 w-1.5 rounded-full bg-[#c084fc] inline-block animate-pulse shrink-0" title="Unsaved changes" />}
               </span>
             )}
           </div>
@@ -229,6 +231,18 @@ export default function FileExplorerPanel({
 
   return (
     <div className="flex flex-col h-full overflow-hidden select-none">
+      <ConfirmDialog
+        open={Boolean(pendingDeletePath)}
+        title="Move to Recycle Bin?"
+        message={pendingDeletePath ? `Move "${pendingDeletePath}" to Recycle Bin? You can restore it later.` : ''}
+        confirmLabel="Move"
+        danger
+        onCancel={() => setPendingDeletePath(null)}
+        onConfirm={() => {
+          if (pendingDeletePath) onDelete(pendingDeletePath);
+          setPendingDeletePath(null);
+        }}
+      />
       <div className="flex items-center justify-between px-3 h-9 border-b border-[#30363d] bg-[#161b22] shrink-0">
         <div className="flex items-center gap-1">
           <button onClick={() => handleStartCreate('file', '')} className="p-1 hover:bg-[#0d1117] rounded text-[#8b949e] hover:text-white transition duration-150 cursor-pointer" title="Create File in Root">
@@ -250,13 +264,13 @@ export default function FileExplorerPanel({
               NEW {showAddInput.type === 'file' ? 'FILE' : 'FOLDER'}
               {showAddInput.parent ? ` IN /${showAddInput.parent}` : ''}
             </span>
-            <div className="flex items-center gap-1 bg-[#0d1117] px-2 h-7 rounded border border-[#30363d] focus-within:border-[#58a6ff]">
+            <div className="flex items-center gap-1 bg-[#0d1117] px-2 h-7 rounded border border-[#30363d] focus-within:border-[#c084fc]">
               <input
                 type="text"
                 value={newItemName}
                 onChange={(e) => setNewItemName(e.target.value)}
                 placeholder="Name..."
-                className="bg-transparent border-0 outline-none flex-1 text-slate-100 text-[11px] w-full placeholder-[#58a6ff]/40"
+                className="bg-transparent border-0 outline-none flex-1 text-slate-100 text-[11px] w-full placeholder-[#c084fc]/40"
                 autoFocus
               />
               <button type="submit" className="text-emerald-400 hover:text-emerald-300">
@@ -282,3 +296,4 @@ export default function FileExplorerPanel({
     </div>
   );
 }
+

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Editor, { Monaco } from '@monaco-editor/react';
 import { 
-  Terminal as TermIcon, Play, Save, Monitor, Moon, Sun, 
+  Terminal as TermIcon, Play, Save, Monitor, 
   FolderTree, Package, Puzzle, Trash2, User, ChevronDown, 
   Plus, Check, X, FileText, Globe, AlertTriangle, RefreshCw, Download,
   Bell, Clock, Maximize2, ArrowLeft, ToggleLeft, ToggleRight, PanelRightClose, PanelRightOpen,
@@ -11,11 +11,13 @@ import {
 
 import { useStore } from '../store';
 import { compileWorkspaceSandbox } from '../compiler';
+import { createZipBlob } from '../zip';
 import FileExplorerPanel from './FileExplorerPanel';
 import ExtensionDownloaderPanel from './ExtensionDownloaderPanel';
 import PackageDownloaderPanel from './PackageDownloaderPanel';
 import RecycleBinPanel from './RecycleBinPanel';
 import ProfilePanel from './ProfilePanel';
+import ConfirmDialog from './ConfirmDialog';
 
 interface IDEWorkspaceProps {
   onBackToDashboard: () => void;
@@ -70,11 +72,29 @@ const createReactSnippet = (kind: 'component' | 'hook', path: string) => {
   return `\nfunction ${componentName}() {\n  return (\n    <section>\n      <h2>${componentName}</h2>\n    </section>\n  );\n}\n\nexport default ${componentName};\n`;
 };
 
+const formatSandboxRuntimeError = (message: string, filename?: string, line?: number, column?: number) => {
+  const location = line ? `${filename?.split('/').pop() || 'preview'}:${line}${column ? `:${column}` : ''}` : 'preview';
+
+  if (message.includes("Cannot read properties of undefined (reading 'transform')")) {
+    return `Preview compiler issue at ${location}: the TypeScript transformer was not available. Refresh and run again. If this began after installing a package, remove that package and retry.`;
+  }
+
+  if (/Cannot find module|Failed to resolve module|Import.*not/i.test(message)) {
+    return `Import problem at ${location}: ${message}. Check the file exists and local imports use ./ or ../.`;
+  }
+
+  if (/Unexpected token/i.test(message)) {
+    return `Syntax problem at ${location}: ${message}. Check for a missing bracket, quote, comma, or JSX closing tag.`;
+  }
+
+  return `Runtime problem at ${location}: ${message}`;
+};
+
 export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
   // Pull stores
   const store = useStore();
   const activeProj = store.projects[store.activeProjectId || ''];
-  const theme = store.theme;
+  const theme: 'dark' | 'light' = 'dark';
   const sidebarPanel = store.sidebarPanel;
   const terminalOpen = store.terminalOpen;
   const unsavedDrafts = store.unsavedDrafts;
@@ -90,6 +110,8 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
   const [terminalPanel, setTerminalPanel] = useState<'terminal' | 'output' | 'problems'>('terminal');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<WorkspaceNotification[]>([]);
+  const [popupMessage, setPopupMessage] = useState<string | null>(null);
+  const [deleteProjectConfirmOpen, setDeleteProjectConfirmOpen] = useState(false);
 
   // Refs for dragging resizers
   const containerRef = useRef<HTMLDivElement>(null);
@@ -240,14 +262,16 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
 
     setTimeout(() => {
       try {
-        const result = compileWorkspaceSandbox(activeProj, unsavedDrafts);
+        const latestProject = useStore.getState().projects[activeProj.id] || activeProj;
+        const result = compileWorkspaceSandbox(latestProject, unsavedDrafts);
         activeRevokes.current = result.blobUrls;
         
+        setPreviewSrcDoc(result.html);
+
         if (result.error) {
           setRuntimeError(result.error);
           store.addTerminalLog({ type: 'error', content: `Compilation Failed: ${result.error}` });
         } else {
-          setPreviewSrcDoc(result.html);
           store.addTerminalLog({ type: 'success', content: 'Workspace compiled successfully. Sandbox listening on localhost:3000' });
         }
       } catch (err: any) {
@@ -283,14 +307,16 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
       if (!data) return;
 
       if (data.type === 'SANDBOX_RUNTIME_ERROR') {
-        setRuntimeError(`Runtime Error: ${data.message} (${data.filename || 'anonymous'}:${data.lineno}:${data.colno})`);
+        const friendlyMessage = formatSandboxRuntimeError(data.message, data.filename, data.lineno, data.colno);
+        setRuntimeError(friendlyMessage);
         store.addTerminalLog({
           type: 'error',
-          content: `Sandbox [Runtime Error]: ${data.message} in ${data.filename?.split('/').pop() || 'index'}:${data.lineno}`
+          content: friendlyMessage
         });
       }
 
       if (data.type === 'SANDBOX_CONSOLE') {
+        if (!data.content || data.content.includes("Cannot read properties of undefined (reading 'transform')")) return;
         store.addTerminalLog({
           type: data.level === 'error' ? 'error' : 'output',
           content: `[Console] ${data.content}`
@@ -330,7 +356,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
         if (q && activeProj && activeProj.files[q]) {
           store.openTab(store.activeProjectId!, q);
         } else if (q) {
-          alert(`File or path: "${q}" not found.`);
+          setPopupMessage(`File or path "${q}" was not found.`);
         }
       }
       
@@ -481,18 +507,22 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
     window.addEventListener('mouseup', handleUp);
   };
 
-  // Export fully serialized workspace database to user local disk as JSON text file
-  const handleExportProjectJSON = () => {
-    const payload = JSON.stringify(activeProj, null, 2);
-    const blob = new Blob([payload], { type: 'application/json' });
+  const handleExportProjectZip = () => {
+    const entries = Object.values(activeProj.files)
+      .filter((file) => !file.isFolder)
+      .map((file) => ({
+        path: file.path,
+        content: unsavedDrafts[file.path] !== undefined ? unsavedDrafts[file.path] : file.content
+      }));
+    const blob = createZipBlob(entries);
     const u = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = u;
-    a.download = `devdocks-${activeProj.name.toLowerCase().replace(/\s+/g, '-')}-workspace.json`;
+    a.download = `${activeProj.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'devdocks-workspace'}.zip`;
     a.click();
     URL.revokeObjectURL(u);
     setDropdownOpen(false);
-    store.addTerminalLog({ type: 'success', content: 'Database workspace exported completely as JSON file backup.' });
+    store.addTerminalLog({ type: 'success', content: 'Workspace source exported as ZIP with the same file tree structure.' });
   };
 
   const executeManualTerminal = (e: React.FormEvent) => {
@@ -537,21 +567,25 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
   const installExtensionWithNotice = (id: string) => {
     store.installExtension(activeProj.id, id);
     pushNotification('extension', 'Extension installed', `${id} is active in this workspace.`);
+    window.setTimeout(handleExecuteSandbox, 0);
   };
 
   const uninstallExtensionWithNotice = (id: string) => {
     store.uninstallExtension(activeProj.id, id);
     pushNotification('extension', 'Extension removed', `${id} was removed from this workspace.`);
+    window.setTimeout(handleExecuteSandbox, 0);
   };
 
   const installPackageWithNotice = (name: string, version?: string) => {
     store.installPackage(activeProj.id, name, version);
     pushNotification('package', 'Package installed', `${name}${version ? `@${version}` : ''} was added to package.json dependencies.`);
+    window.setTimeout(handleExecuteSandbox, 0);
   };
 
   const uninstallPackageWithNotice = (name: string) => {
     store.uninstallPackage(activeProj.id, name);
     pushNotification('package', 'Package removed', `${name} was removed from package.json dependencies.`);
+    window.setTimeout(handleExecuteSandbox, 0);
   };
 
   const deletePathWithNotice = (path: string) => {
@@ -572,6 +606,56 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
     <div ref={containerRef} className={`h-screen flex flex-col overflow-hidden select-none font-sans ${
       theme === 'dark' ? 'bg-[#0d1117] text-[#c9d1d9]' : 'bg-slate-50 text-slate-800'
     }`}>
+      <AnimatePresence>
+        {popupMessage && (
+          <motion.div
+            className="fixed left-0 right-0 top-4 z-[80] flex justify-center px-4 pointer-events-none"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: -18, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -14, scale: 0.98 }}
+              transition={{ type: 'spring', stiffness: 260, damping: 24 }}
+              className="pointer-events-auto w-full max-w-md overflow-hidden rounded-lg border border-purple-400/30 bg-[#161b22]/95 shadow-2xl shadow-purple-950/30 backdrop-blur-xl"
+            >
+              <div className="h-px bg-gradient-to-r from-transparent via-purple-400 to-transparent" />
+              <div className="flex items-start gap-3 px-4 py-3">
+                <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-purple-500/10 text-purple-300 ring-1 ring-purple-400/25">
+                  <Bell size={14} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-white">DevDocks message</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-[#c9d1d9] break-words">{popupMessage}</p>
+                </div>
+                <button
+                  onClick={() => setPopupMessage(null)}
+                  className="rounded p-1 text-[#8b949e] transition hover:bg-[#0d1117] hover:text-white"
+                  title="Dismiss message"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <ConfirmDialog
+        open={deleteProjectConfirmOpen}
+        title="Move project to Recycle Bin?"
+        message="This project will move to the Recycle Bin. You can restore it later from the dashboard."
+        confirmLabel="Move"
+        danger
+        onCancel={() => setDeleteProjectConfirmOpen(false)}
+        onConfirm={() => {
+          store.deleteProject(activeProj.id);
+          setDeleteProjectConfirmOpen(false);
+          setDropdownOpen(false);
+          onBackToDashboard();
+        }}
+      />
       
       {/* -------------------------------- NAVBAR -------------------------------- */}
       <nav id="navbar" className={`h-12 border-b px-3 flex items-center justify-between shrink-0 z-20 ${
@@ -593,7 +677,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             onClick={onBackToDashboard}
             className="flex items-center gap-2 cursor-pointer group shrink-0"
           >
-            <div className="h-6 w-6 rounded bg-[#1f6feb] flex items-center justify-center text-white shrink-0 antialiased shadow">
+            <div className="h-6 w-6 rounded bg-[#9333ea] flex items-center justify-center text-white shrink-0 antialiased shadow">
               <span className="text-[10px] font-black">DD</span>
             </div>
             <span className="font-sans font-bold text-xs tracking-tight text-white dark:text-white block max-w-[80px] truncate animate" title="Back to Dashboard">
@@ -607,7 +691,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             onClick={() => store.setAutoSave(!autoSave)}
             className={`h-7 px-2.5 rounded text-xs font-semibold flex items-center gap-1.5 transition border ${
               autoSave
-                ? 'bg-[#1f6feb]/15 border-[#1f6feb]/40 text-[#58a6ff]'
+                ? 'bg-[#9333ea]/15 border-[#9333ea]/40 text-[#c084fc]'
                 : theme === 'dark'
                   ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                   : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
@@ -653,16 +737,16 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                     <span>Save Project</span>
                   </button>
                   <button 
-                    onClick={handleExportProjectJSON}
+                    onClick={handleExportProjectZip}
                     className={`w-full text-left px-3 py-2 flex items-center gap-2 ${theme === 'dark' ? 'hover:bg-slate-900' : 'hover:bg-slate-100'}`}
                   >
                     <Download size={12} />
-                    <span>Export Project</span>
+                    <span>Download ZIP</span>
                   </button>
                   <div className="h-px bg-white/5 my-1" />
                   <button 
                     onClick={() => { onBackToDashboard(); setDropdownOpen(false); }}
-                    className={`w-full text-left px-3 py-2 flex items-center gap-2 ${theme === 'dark' ? 'hover:bg-slate-900 text-cyan-400' : 'hover:bg-slate-100 text-cyan-600'}`}
+                    className={`w-full text-left px-3 py-2 flex items-center gap-2 ${theme === 'dark' ? 'hover:bg-slate-900 text-purple-400' : 'hover:bg-slate-100 text-purple-500'}`}
                   >
                     <span>Open Project...</span>
                   </button>
@@ -680,11 +764,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                   </button>
                   <button 
                     onClick={() => {
-                      if (confirm('Move project to Recycle Bin?')) {
-                        store.deleteProject(activeProj.id);
-                        onBackToDashboard();
-                      }
-                      setDropdownOpen(false);
+                      setDeleteProjectConfirmOpen(true);
                     }}
                     className="w-full text-left px-3 py-2 flex items-center gap-2 text-red-400 hover:bg-red-500/10 cursor-pointer"
                   >
@@ -706,7 +786,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
           
           {/* Unsaved Draft Indicator Dot */}
           {Object.keys(unsavedDrafts).length > 0 && (
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-400/5 border border-cyan-400/20 text-cyan-400 text-[10px] font-mono animate-pulse">
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-purple-400/5 border border-purple-400/20 text-purple-400 text-[10px] font-mono animate-pulse">
               <span>● Draft Changes</span>
             </div>
           )}
@@ -726,24 +806,13 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             id="sandbox-compile-btn"
             onClick={handleExecuteSandbox}
             disabled={runLoading}
-            className={`px-3 h-8 rounded-lg text-xs font-bold flex items-center gap-1.5 transition bg-cyan-500 text-slate-950 hover:bg-cyan-400 disabled:opacity-50 border-0`}
+            className={`px-3 h-8 rounded-lg text-xs font-bold flex items-center gap-1.5 transition bg-purple-500 text-slate-950 hover:bg-purple-400 disabled:opacity-50 border-0`}
             title="Run Sandbox Preview"
           >
             {runLoading ? <RefreshCw size={13} className="animate-spin" /> : <Play size={13} strokeWidth={2.5} />}
             <span>{runLoading ? 'Running...' : 'Run'}</span>
           </button>
 
-          <div className="h-4 w-[1px] bg-white/10" />
-
-          {/* Theme Switcher */}
-          <button
-            onClick={() => store.setTheme(theme === 'dark' ? 'light' : 'dark')}
-            className={`h-8 w-8 rounded-lg flex items-center justify-center transition border ${
-              theme === 'dark' ? 'bg-slate-900 border-slate-800 text-amber-400 hover:bg-slate-800' : 'bg-white border-slate-200 text-indigo-600 hover:bg-slate-50'
-            }`}
-          >
-            {theme === 'dark' ? <Sun size={13} /> : <Moon size={13} />}
-          </button>
         </div>
       </nav>
 
@@ -759,7 +828,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             <button
               onClick={() => store.setSidebarPanel(sidebarPanel === 'explorer' ? null : 'explorer')}
               className={`p-2 rounded relative cursor-pointer group transition ${
-                sidebarPanel === 'explorer' ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+                sidebarPanel === 'explorer' ? 'bg-[#1f242c] text-[#c084fc]' : 'text-[#8b949e] hover:text-white'
               }`}
             >
               <FolderTree size={16} />
@@ -769,7 +838,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             <button
               onClick={() => store.setSidebarPanel(sidebarPanel === 'extensions' ? null : 'extensions')}
               className={`p-2 rounded relative cursor-pointer group transition ${
-                sidebarPanel === 'extensions' ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+                sidebarPanel === 'extensions' ? 'bg-[#1f242c] text-[#c084fc]' : 'text-[#8b949e] hover:text-white'
               }`}
             >
               <Puzzle size={16} />
@@ -779,7 +848,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             <button
               onClick={() => store.setSidebarPanel(sidebarPanel === 'packages' ? null : 'packages')}
               className={`p-2 rounded relative cursor-pointer group transition ${
-                sidebarPanel === 'packages' ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+                sidebarPanel === 'packages' ? 'bg-[#1f242c] text-[#c084fc]' : 'text-[#8b949e] hover:text-white'
               }`}
             >
               <Package size={16} />
@@ -789,7 +858,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             <button
               onClick={() => store.setTerminalOpen(!terminalOpen)}
               className={`p-2 rounded relative cursor-pointer group transition ${
-                terminalOpen ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+                terminalOpen ? 'bg-[#1f242c] text-[#c084fc]' : 'text-[#8b949e] hover:text-white'
               }`}
             >
               <TermIcon size={16} />
@@ -799,7 +868,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             <button
               onClick={() => store.setSidebarPanel(sidebarPanel === 'recycle' ? null : 'recycle')}
               className={`p-2 rounded relative cursor-pointer group transition ${
-                sidebarPanel === 'recycle' ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+                sidebarPanel === 'recycle' ? 'bg-[#1f242c] text-[#c084fc]' : 'text-[#8b949e] hover:text-white'
               }`}
             >
               <Trash2 size={16} />
@@ -812,7 +881,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             <button
               onClick={openNotifications}
               className={`p-2 rounded relative cursor-pointer group transition ${
-                notificationsOpen ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+                notificationsOpen ? 'bg-[#1f242c] text-[#c084fc]' : 'text-[#8b949e] hover:text-white'
               }`}
             >
               <Bell size={16} />
@@ -826,7 +895,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             <button
               onClick={() => store.setSidebarPanel(sidebarPanel === 'profile' ? null : 'profile')}
               className={`p-2 rounded relative cursor-pointer group transition ${
-                sidebarPanel === 'profile' ? 'bg-[#1f242c] text-[#58a6ff]' : 'text-[#8b949e] hover:text-white'
+                sidebarPanel === 'profile' ? 'bg-[#1f242c] text-[#c084fc]' : 'text-[#8b949e] hover:text-white'
               }`}
             >
               <User size={16} />
@@ -923,7 +992,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               {/* Resize handlebar */}
               <div
                 onMouseDown={handleSidebarResMouseDown}
-                className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[#58a6ff]/30 transition z-30"
+                className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[#c084fc]/30 transition z-30"
               />
             </div>
           )}
@@ -957,17 +1026,17 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                       onClick={() => store.openTab(activeProj.id, path)}
                       className={`group h-full px-3 flex items-center gap-2 text-xs font-semibold border-r cursor-pointer shrink-0 transition select-none ${
                         isActive
-                          ? (theme === 'dark' ? 'bg-[#0d1117] text-[#58a6ff] border-b-2 border-b-[#58a6ff] border-[#30363d]' : 'bg-white text-[#1f6feb] border-b-2 border-b-[#1f6feb] border-slate-200')
+                          ? (theme === 'dark' ? 'bg-[#0d1117] text-[#c084fc] border-b-2 border-b-[#c084fc] border-[#30363d]' : 'bg-white text-[#9333ea] border-b-2 border-b-[#9333ea] border-slate-200')
                           : (theme === 'dark' ? 'text-[#8b949e] hover:text-white hover:bg-[#1f242c] border-[#30363d]' : 'text-slate-500 hover:text-[#000] hover:bg-white/40 border-slate-200')
                       }`}
                     >
-                      <FileText size={11} className={isActive ? 'text-[#58a6ff]' : 'text-[#8b949e]'} />
+                      <FileText size={11} className={isActive ? 'text-[#c084fc]' : 'text-[#8b949e]'} />
                       <span>{label}</span>
                       
                       {/* Unsaved indicator circle or close button toggle */}
                       <span className="flex items-center">
                         {hasDraft ? (
-                          <span className="h-1.5 w-1.5 rounded-full bg-[#58a6ff] block group-hover:hidden transition-all shrink-0" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-[#c084fc] block group-hover:hidden transition-all shrink-0" />
                         ) : null}
                         <button
                           onClick={(e) => {
@@ -1000,7 +1069,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                     {extensionFeatures.prettier && (
                       <button
                         onClick={formatActiveFile}
-                        className="h-5 px-1.5 rounded border border-[#30363d] bg-[#0d1117] text-[#58a6ff] hover:text-white flex items-center gap-1 normal-case"
+                        className="h-5 px-1.5 rounded border border-[#30363d] bg-[#0d1117] text-[#c084fc] hover:text-white flex items-center gap-1 normal-case"
                         title="Prettier: format active file"
                       >
                         <Wand2 size={10} />
@@ -1092,7 +1161,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               {previewOpen && (
                 <div
                   onMouseDown={handleEditorSplitResMouseDown}
-                  className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[#58a6ff]/35 transition z-30"
+                  className="absolute top-0 right-0 w-[4px] h-full cursor-col-resize hover:bg-[#c084fc]/35 transition z-30"
                 />
               )}
             </div>
@@ -1104,7 +1173,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               {/* Preview controls panel */}
               <div className={`h-9 px-3 flex items-center justify-between border-b shrink-0 bg-[#161b22] border-[#30363d] text-[#c9d1d9] text-xs`}>
                 <div className="flex items-center gap-1.5 min-w-0 pr-1 select-none">
-                  <Monitor size={11} className="text-[#58a6ff]" />
+                  <Monitor size={11} className="text-[#c084fc]" />
                   <span className="font-bold font-mono text-[9px] tracking-wider uppercase">Live Browser Iframe Sandbox</span>
                 </div>
 
@@ -1132,18 +1201,35 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
               </div>
 
               {/* Dynamic Error details banner overlay */}
-              {runtimeError && (
-                <div className="bg-[#3b111a] border-b border-[#ff7b72]/30 px-4 py-3 text-[#ff7b72] flex items-start gap-3 text-xs z-30 animate-slide-down shadow-xl">
-                  <AlertTriangle size={14} className="text-[#ff7b72] shrink-0 mt-0.5 animate-bounce" />
-                  <div className="flex-1 min-w-0">
-                    <span className="font-bold block text-[#ff7b72] mb-1 font-mono text-[10px]">Diagnostic Compiler Warning / Sandbox Error:</span>
-                    <p className="font-mono text-[10.5px] leading-relaxed break-words">{runtimeError}</p>
-                  </div>
-                  <button onClick={() => setRuntimeError(null)} className="text-[#ff7b72] hover:text-white cursor-pointer select-none">
-                    <X size={13} />
-                  </button>
-                </div>
-              )}
+              <AnimatePresence>
+                {runtimeError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="z-30 border-b border-purple-400/25 bg-[#161b22]/95 px-4 py-3 text-xs shadow-xl shadow-purple-950/20 backdrop-blur"
+                  >
+                    <div className="mx-auto flex max-w-5xl items-start gap-3 rounded border border-[#30363d] bg-[#0d1117]/75 px-3 py-2.5">
+                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded bg-[#ff7b72]/10 text-[#ffb3ad] ring-1 ring-[#ff7b72]/25">
+                        <AlertTriangle size={14} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="mb-1 block font-mono text-[10px] font-bold uppercase tracking-wider text-purple-300">
+                          Sandbox diagnostic
+                        </span>
+                        <p className="font-mono text-[10.5px] leading-relaxed text-[#ffb3ad] break-words">{runtimeError}</p>
+                      </div>
+                      <button
+                        onClick={() => setRuntimeError(null)}
+                        className="rounded p-1 text-[#8b949e] transition hover:bg-[#161b22] hover:text-white"
+                        title="Dismiss diagnostic"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* Iframe Viewport container code */}
               <div className={`flex-1 w-full relative transition-colors ${
@@ -1201,7 +1287,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                 {/* Drag handle resize bar */}
                 <div
                   onMouseDown={handleTerminalResMouseDown}
-                  className="absolute top-0 left-0 w-full h-[4px] cursor-row-resize hover:bg-[#58a6ff]/35 transition z-30"
+                  className="absolute top-0 left-0 w-full h-[4px] cursor-row-resize hover:bg-[#c084fc]/35 transition z-30"
                 />
 
                 {/* Header panel strip */}
@@ -1215,7 +1301,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                         onClick={() => setTerminalPanel(panel)}
                         className={`h-full border-b-2 text-[10px] font-bold uppercase tracking-wider ${
                           terminalPanel === panel
-                            ? 'border-[#58a6ff] text-[#c9d1d9]'
+                            ? 'border-[#c084fc] text-[#c9d1d9]'
                             : 'border-transparent text-[#8b949e] hover:text-[#c9d1d9]'
                         }`}
                       >
@@ -1235,7 +1321,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                           }}
                           className={`h-5 px-2 rounded border text-[9px] font-mono transition shrink-0 ${
                             session.id === activeTerminalSessionId
-                              ? 'bg-[#0d1117] border-[#58a6ff]/50 text-[#c9d1d9]'
+                              ? 'bg-[#0d1117] border-[#c084fc]/50 text-[#c9d1d9]'
                               : 'bg-[#0d1117] border-[#30363d] text-[#8b949e] hover:text-white'
                           }`}
                           title={session.createdAt}
@@ -1287,7 +1373,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
 
                   {terminalPanel === 'problems' && extensionDiagnostics.map((diagnostic) => (
                     <div key={diagnostic.id} className={`whitespace-pre-wrap select-text break-words ${
-                      diagnostic.severity === 'error' ? 'text-[#ff7b72] font-semibold' : diagnostic.severity === 'warning' ? 'text-[#d29922]' : 'text-[#58a6ff]'
+                      diagnostic.severity === 'error' ? 'text-[#ff7b72] font-semibold' : diagnostic.severity === 'warning' ? 'text-[#d29922]' : 'text-[#c084fc]'
                     }`}>
                       <div className="flex items-start gap-2">
                         <AlertTriangle size={12} className="shrink-0 mt-0.5" />
@@ -1326,7 +1412,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
                 {/* Custom shell inputs forms */}
                 {terminalPanel === 'terminal' && (
                 <form onSubmit={executeManualTerminal} className="h-8 border-t border-[#30363d] bg-[#0d1117] flex items-center pr-3">
-                  <span className="pl-4 pr-1 text-[#58a6ff] text-xs shrink-0 select-none">PS /workspace/{activeProj.name}/{store.terminalCwd === 'root' ? '' : store.terminalCwd} &gt; </span>
+                  <span className="pl-4 pr-1 text-[#c084fc] text-xs shrink-0 select-none">PS /workspace/{activeProj.name}/{store.terminalCwd === 'root' ? '' : store.terminalCwd} &gt; </span>
                   <input
                     type="text"
                     value={cmdInput}
@@ -1348,3 +1434,4 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
     </div>
   );
 }
+

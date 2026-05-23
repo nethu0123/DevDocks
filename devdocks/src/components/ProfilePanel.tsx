@@ -32,7 +32,7 @@ export default function ProfilePanel({
         {/* User Card */}
         <div className="p-4 rounded border border-[#30363d] bg-[#161b22] relative overflow-hidden group">
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-full bg-[#0d1117] border border-[#30363d] flex items-center justify-center text-[#58a6ff] font-bold">
+            <div className="h-8 w-8 rounded-full bg-[#0d1117] border border-[#30363d] flex items-center justify-center text-[#c084fc] font-bold">
               <User size={15} />
             </div>
             <div className="min-w-0 flex-1">
@@ -48,7 +48,7 @@ export default function ProfilePanel({
           <div className="grid grid-cols-1 gap-2 mt-3 pt-3 border-t border-[#30363d]">
             <div className="text-center bg-[#0d1117] p-2 rounded border border-[#30363d]">
               <span className="text-[9px] uppercase font-mono font-bold text-[#8b949e] block">Workspaces</span>
-              <span className="text-xs font-bold text-[#58a6ff] font-mono mt-0.5 block">{projectList.length}</span>
+              <span className="text-xs font-bold text-[#c084fc] font-mono mt-0.5 block">{projectList.length}</span>
             </div>
           </div>
         </div>
@@ -62,7 +62,7 @@ export default function ProfilePanel({
                 <span className="text-xs font-bold text-white leading-tight">{activeDetails.name}</span>
                 <button
                   onClick={() => onSelectProject(activeDetails.id)}
-                  className="px-2 h-6 bg-[#1f6feb] text-white text-[10px] font-bold rounded flex items-center gap-1 hover:bg-[#388bfd] cursor-pointer transition select-none border-0"
+                  className="px-2 h-6 bg-[#9333ea] text-white text-[10px] font-bold rounded flex items-center gap-1 hover:bg-[#a855f7] cursor-pointer transition select-none border-0"
                 >
                   <ExternalLink size={9} />
                   <span>Mount IDE</span>
@@ -108,3 +108,4 @@ export default function ProfilePanel({
     </div>
   );
 }
+

@@ -9,6 +9,14 @@ interface PackageDownloaderPanelProps {
 }
 
 const NPM_REGISTRY = [
+  { name: 'react', desc: 'React UI runtime.', version: '^19.0.1', category: 'Core' },
+  { name: 'react-dom', desc: 'React DOM renderer.', version: '^19.0.1', category: 'Core' },
+  { name: 'typescript', desc: 'TypeScript language and compiler package.', version: '~5.8.2', category: 'Core' },
+  { name: '@types/react', desc: 'React type definitions.', version: '^19.0.1', category: 'Core' },
+  { name: '@types/react-dom', desc: 'React DOM type definitions.', version: '^19.0.1', category: 'Core' },
+  { name: 'tailwindcss', desc: 'Utility-first CSS framework.', version: '^4.1.14', category: 'Styling' },
+  { name: 'postcss', desc: 'CSS transformation pipeline.', version: '^8.4.38', category: 'Styling' },
+  { name: 'autoprefixer', desc: 'Add vendor prefixes through PostCSS.', version: '^10.4.19', category: 'Styling' },
   { name: 'zustand', desc: 'Small, fast state management for React.', version: '^5.0.13', category: 'State' },
   { name: 'framer-motion', desc: 'Production-ready animation library for React.', version: '^12.23.24', category: 'Animation' },
   { name: 'motion', desc: 'Modern animation primitives for React and JavaScript.', version: '^12.23.24', category: 'Animation' },
@@ -129,6 +137,14 @@ export default function PackageDownloaderPanel({
   }, [query, installed.join('|')]).map((pkg) => ({ ...pkg, source: 'local' as const }));
 
   const filtered: PackageResult[] = liveResults.length > 0 ? liveResults : localFiltered;
+  const groupedResults = useMemo(() => {
+    return filtered.reduce<Record<string, PackageResult[]>>((groups, pkg) => {
+      const key = pkg.category || 'Other';
+      groups[key] = groups[key] || [];
+      groups[key].push(pkg);
+      return groups;
+    }, {});
+  }, [filtered]);
 
   const customQuery = query.trim().toLowerCase();
   const canInstallSearch = customQuery.length > 1 && !installed.includes(customQuery);
@@ -144,7 +160,7 @@ export default function PackageDownloaderPanel({
               placeholder="Search npm packages or type a package name"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              className="w-full h-8 pl-8 pr-3 rounded bg-[#0d1117] border border-[#30363d] text-xs text-[#c9d1d9] outline-none focus:border-[#58a6ff] placeholder-[#8b949e]"
+              className="w-full h-8 pl-8 pr-3 rounded bg-[#0d1117] border border-[#30363d] text-xs text-[#c9d1d9] outline-none focus:border-[#c084fc] placeholder-[#8b949e]"
             />
           </div>
           <button
@@ -170,7 +186,7 @@ export default function PackageDownloaderPanel({
             <div className="flex flex-wrap gap-1.5 max-h-[90px] overflow-y-auto pr-1">
               {installed.map((pkg) => (
                 <div key={pkg} className="inline-flex items-center gap-1.5 pl-2 py-0.5 pr-0.5 rounded bg-[#161b22] border border-[#30363d] text-[#c9d1d9] text-[10px] font-mono">
-                  <Package size={10} className="text-[#58a6ff]" />
+                  <Package size={10} className="text-[#c084fc]" />
                   <span>{pkg}</span>
                   <button onClick={() => onUninstall(pkg)} className="p-1 rounded text-[#8b949e] hover:text-red-400 hover:bg-[#0d1117] transition cursor-pointer" title="Uninstall">
                     <Trash2 size={10} />
@@ -188,21 +204,27 @@ export default function PackageDownloaderPanel({
           </div>
           {registryError && <div className="text-[9px] text-[#d29922] font-mono mb-2">{registryError}</div>}
 
-          <div className="space-y-2">
-            {filtered.map((pkg) => {
+          <div className="space-y-4">
+            {(Object.entries(groupedResults) as [string, PackageResult[]][]).map(([category, packages]) => (
+              <div key={category} className="space-y-2">
+                <div className="sticky top-0 z-10 flex items-center justify-between bg-[#0d1117]/95 py-1 backdrop-blur">
+                  <span className="text-[9px] uppercase font-mono font-bold tracking-wider text-[#c084fc]">{category}</span>
+                  <span className="text-[9px] font-mono text-[#8b949e]">{packages.length}</span>
+                </div>
+            {packages.map((pkg) => {
               const isInstalled = installed.includes(pkg.name);
               return (
                 <div key={pkg.name} className="p-3 rounded border border-[#30363d] bg-[#161b22] flex items-start justify-between gap-3 transition hover:bg-[#1f242c]">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <Code size={11} className="text-[#58a6ff] shrink-0" />
+                      <Code size={11} className="text-[#c084fc] shrink-0" />
                       <span className="font-mono text-xs font-bold text-white truncate">{pkg.name}</span>
                       <span className="text-[8px] font-mono text-[#8b949e] shrink-0">{pkg.version}</span>
                       {pkg.source === 'live' && <span className="text-[8px] bg-emerald-500/10 text-emerald-400 px-1.5 rounded border border-emerald-500/20 shrink-0">Live</span>}
                     </div>
                     <p className="text-[10px] text-[#8b949e] mt-1.5 leading-normal">{pkg.desc}</p>
                     <div className="flex items-center gap-2 mt-2">
-                      <span className="text-[8px] font-mono text-[#58a6ff] bg-blue-500/10 px-1.5 rounded border border-blue-500/20 inline-block">
+                      <span className="text-[8px] font-mono text-[#c084fc] bg-purple-500/10 px-1.5 rounded border border-purple-400/20 inline-block">
                         {pkg.category}
                       </span>
                       {pkg.downloads && <span className="text-[8px] font-mono text-[#8b949e]">{pkg.downloads}</span>}
@@ -215,7 +237,7 @@ export default function PackageDownloaderPanel({
                     className={`group h-6 px-2.5 rounded text-[10px] font-bold border flex items-center gap-1 shrink-0 cursor-pointer transition ${
                       isInstalled
                         ? 'bg-[#0d1117] border-[#30363d] text-[#8b949e] hover:text-[#ff7b72] hover:border-[#ff7b72]/45 hover:bg-red-500/10'
-                        : 'bg-[#1f6feb] border-0 text-white hover:bg-[#388bfd]'
+                        : 'bg-[#9333ea] border-0 text-white hover:bg-[#a855f7]'
                     }`}
                   >
                     {isInstalled ? (
@@ -235,9 +257,12 @@ export default function PackageDownloaderPanel({
                 </div>
               );
             })}
+              </div>
+            ))}
           </div>
         </div>
       </div>
     </div>
   );
 }
+

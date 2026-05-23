@@ -14,7 +14,7 @@
   }
 }
 
-/* Custom scrollbars for Dark/Light IDE appearance */
+/* Custom scrollbars for the dark IDE appearance */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -31,14 +31,5 @@
 
 .dark ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
-}
-
-.light ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.1);
-  border-radius: 4px;
-}
-
-.light ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
 }
 

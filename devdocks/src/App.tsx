@@ -4,22 +4,24 @@ import LandingPage from './components/LandingPage';
 import DashboardView from './components/DashboardView';
 import NewProjectModal from './components/NewProjectModal';
 import IDEWorkspace from './components/IDEWorkspace';
+import AuthPage from './components/AuthPage';
 
 export default function App() {
   const store = useStore();
   const [modalOpen, setModalOpen] = useState(false);
+  const userProjects = Object.fromEntries(
+    Object.entries(store.projects).filter(([, project]) => (
+      project.ownerId === store.currentUser?.id && project.ownerEmail === store.currentUser?.email
+    ))
+  );
 
-  // Sync state and active theme classes on Mount
+  // DevDocks is dark-only. Remove any older persisted light theme class on mount.
   useEffect(() => {
     const root = document.documentElement;
-    if (store.theme === 'dark') {
-      root.classList.add('dark');
-      root.classList.remove('light');
-    } else {
-      root.classList.add('light');
-      root.classList.remove('dark');
-    }
-  }, [store.theme]);
+    root.classList.add('dark');
+    root.classList.remove('light');
+    if (store.theme !== 'dark') store.setTheme('dark');
+  }, []);
 
   // Project generation submit action
   const handleCreateProject = (name: string, description: string, techStack: string[]) => {
@@ -48,34 +50,37 @@ export default function App() {
 
   return (
     <div className="min-h-screen">
+      {!store.currentUser && (
+        <AuthPage onSignIn={store.signIn} onSignUp={store.signUp} />
+      )}
       
       {/* 1. Landing Screen Router */}
-      {store.currentView === 'landing' && (
-        <LandingPage onGetStarted={() => store.setCurrentView('dashboard')} theme={store.theme} onThemeToggle={() => store.setTheme(store.theme === 'dark' ? 'light' : 'dark')} />
+      {store.currentUser && store.currentView === 'landing' && (
+        <LandingPage onGetStarted={() => store.setCurrentView('dashboard')} currentUser={store.currentUser} onSignOut={store.signOut} />
       )}
 
       {/* 2. Unified Developer Workbenches Grid */}
-      {store.currentView === 'dashboard' && (
+      {store.currentUser && store.currentView === 'dashboard' && (
         <DashboardView
-          projects={store.projects}
+          projects={userProjects}
           onCreateProjectClick={() => setModalOpen(true)}
           onOpenProject={handleOpenWorkspace}
           onRenameProject={store.renameProject}
           onDeleteProject={store.deleteProject}
-          theme={store.theme}
-          onThemeToggle={() => store.setTheme(store.theme === 'dark' ? 'light' : 'dark')}
           onBackToHome={handleBackToLanding}
+          currentUser={store.currentUser}
+          onSignOut={store.signOut}
         />
       )}
 
       {/* 3. Deep Integrated Sandbox IDE Workspace */}
-      {store.currentView === 'ide' && (
+      {store.currentUser && store.currentView === 'ide' && (
         <IDEWorkspace onBackToDashboard={handleBackToDashboard} />
       )}
 
       {/* New Project setup wizard Modal overlay */}
       <NewProjectModal
-        isOpen={modalOpen}
+        isOpen={Boolean(store.currentUser) && modalOpen}
         onClose={() => setModalOpen(false)}
         onCreate={handleCreateProject}
       />
