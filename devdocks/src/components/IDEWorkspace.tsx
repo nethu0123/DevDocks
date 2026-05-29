@@ -18,6 +18,7 @@ import PackageDownloaderPanel from './PackageDownloaderPanel';
 import RecycleBinPanel from './RecycleBinPanel';
 import ProfilePanel from './ProfilePanel';
 import ConfirmDialog from './ConfirmDialog';
+import DevDocksLogo from './DevDocksLogo';
 
 interface IDEWorkspaceProps {
   onBackToDashboard: () => void;
@@ -677,9 +678,7 @@ export default function IDEWorkspace({ onBackToDashboard }: IDEWorkspaceProps) {
             onClick={onBackToDashboard}
             className="flex items-center gap-2 cursor-pointer group shrink-0"
           >
-            <div className="h-6 w-6 rounded bg-[#9333ea] flex items-center justify-center text-white shrink-0 antialiased shadow">
-              <span className="text-[10px] font-black">DD</span>
-            </div>
+            <DevDocksLogo className="h-6 w-6 shadow" />
             <span className="font-sans font-bold text-xs tracking-tight text-white dark:text-white block max-w-[80px] truncate animate" title="Back to Dashboard">
               DevDocks
             </span>

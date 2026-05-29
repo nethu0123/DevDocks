@@ -1,7 +1,8 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Terminal, Bot, Sparkles, Code2, ArrowRight, ShieldCheck, Zap, LogOut } from 'lucide-react';
+import { Sparkles, ArrowRight, LogOut } from 'lucide-react';
 import { AuthUser } from '../types';
+import DevDocksLogo from './DevDocksLogo';
 
 interface LandingPageProps {
   onGetStarted: () => void;
@@ -51,9 +52,7 @@ export default function LandingPage({ onGetStarted, currentUser, onSignOut }: La
         theme === 'dark' ? 'border-[#30363d] bg-[#161b22]/90' : 'border-slate-200 bg-slate-50/90'
       }`}>
         <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-md bg-purple-600 flex items-center justify-center shadow-md">
-            <span className="text-white text-[11px] font-black">DD</span>
-          </div>
+          <DevDocksLogo className="h-8 w-8 shadow-md" />
           <span className={`font-sans text-sm font-bold tracking-tight transition-colors ${
             theme === 'dark' ? 'text-white' : 'text-slate-900'
           }`}>

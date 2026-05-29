@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { AuthUser, Project } from '../types';
 import ConfirmDialog from './ConfirmDialog';
+import DevDocksLogo from './DevDocksLogo';
 
 interface DashboardViewProps {
   projects: Record<string, Project>;
@@ -190,9 +191,7 @@ export default function DashboardView({
             <ArrowLeft size={14} className="stroke-[2.5]" />
           </button>
 
-          <div className="h-8 w-8 rounded bg-purple-600 flex items-center justify-center shadow-md">
-            <span className="text-white text-[11px] font-black">DD</span>
-          </div>
+          <DevDocksLogo className="h-8 w-8 shadow-md" />
           <span className="font-sans font-bold text-sm tracking-tight text-white dark:text-white">DevDocks IDE</span>
         </div>
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Lock, Mail, User, ArrowRight, Code2 } from 'lucide-react';
+import { Lock, Mail, User, ArrowRight } from 'lucide-react';
+import DevDocksLogo from './DevDocksLogo';
 
 interface AuthPageProps {
   onSignIn: (email: string, password: string) => { ok: boolean; message?: string };
@@ -53,9 +54,9 @@ export default function AuthPage({ onSignIn, onSignUp }: AuthPageProps) {
           <div className="flex items-center gap-3">
             <motion.div
               whileHover={{ scale: 1.05, rotate: -4 }}
-              className="h-9 w-9 rounded-md bg-purple-600 flex items-center justify-center shadow-md shadow-purple-950/40"
+              className="shadow-md shadow-purple-950/40"
             >
-              <Code2 size={17} className="text-white" />
+              <DevDocksLogo className="h-9 w-9" />
             </motion.div>
             <div>
               <h1 className="text-base font-bold text-white">DevDocks</h1>

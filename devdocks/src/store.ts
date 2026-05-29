@@ -161,7 +161,7 @@ body {
 
   // App.tsx
   const appCode = `import React${hasZustand ? ', { useState }' : ''} from 'react';
-${hasLucide ? "import { Flame, Sparkles, Terminal, Code, Cpu, Package, Check, RefreshCw } from 'lucide-react';" : ''}
+${hasLucide ? "import { Sparkles, Terminal, Code, Cpu, Package, Check, RefreshCw } from 'lucide-react';" : ''}
 ${hasFramer ? "import { motion } from 'framer-motion';" : ''}
 ${hasZustand ? "import { create } from 'zustand';" : ''}
 
@@ -186,8 +186,20 @@ export default function App() {
         
         {/* Header Hero */}
         <div className="flex items-center gap-4 mb-6">
-          <div className="h-12 w-12 rounded-xl bg-gradient-to-tr from-purple-400 to-purple-600 flex items-center justify-center text-slate-950 font-bold shadow-lg">
-            ${hasLucide ? '<Flame className="h-6 w-6 text-slate-950" />' : 'DD'}
+          <div className="h-12 w-12 rounded-xl bg-[#0d1117] flex items-center justify-center shadow-lg ring-1 ring-slate-700 overflow-hidden">
+            <svg viewBox="0 0 64 64" aria-label="DevDocks logo" className="h-10 w-10" fill="none">
+              <rect x="8" y="7" width="48" height="50" rx="7" fill="#161b22" stroke="#30363d" strokeWidth="2.25" />
+              <rect x="13" y="13" width="9" height="38" rx="3" fill="#0d1117" stroke="#30363d" strokeWidth="1.75" />
+              <path d="M17.5 19H17.6" stroke="#c084fc" strokeWidth="3" strokeLinecap="round" />
+              <path d="M17.5 27H17.6" stroke="#8b5cf6" strokeWidth="3" strokeLinecap="round" />
+              <path d="M17.5 35H17.6" stroke="#238636" strokeWidth="3" strokeLinecap="round" />
+              <path d="M17.5 43H17.6" stroke="#6e7681" strokeWidth="3" strokeLinecap="round" />
+              <path d="M29 22L24 27L29 32" stroke="#c084fc" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M39 22L44 27L39 32" stroke="#c084fc" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M36 20L32 34" stroke="#8b5cf6" strokeWidth="4" strokeLinecap="round" />
+              <path d="M28 42H44" stroke="#238636" strokeWidth="3.25" strokeLinecap="round" />
+              <path d="M28 48H39" stroke="#c084fc" strokeWidth="3.25" strokeLinecap="round" />
+            </svg>
           </div>
           <div>
             <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-purple-300 to-purple-500 bg-clip-text text-transparent">
